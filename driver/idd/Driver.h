@@ -1,0 +1,20 @@
+#pragma once
+
+#define NOMINMAX
+#include <windows.h>
+#include <wdf.h>
+#include <iddcx.h>
+
+extern "C" DRIVER_INITIALIZE DriverEntry;
+EVT_WDF_DRIVER_DEVICE_ADD UsbDisplayEvtDeviceAdd;
+EVT_WDF_DEVICE_D0_ENTRY UsbDisplayEvtDeviceD0Entry;
+EVT_WDF_DEVICE_D0_EXIT UsbDisplayEvtDeviceD0Exit;
+
+EVT_IDD_CX_ADAPTER_INIT_FINISHED UsbDisplayEvtAdapterInitFinished;
+EVT_IDD_CX_ADAPTER_COMMIT_MODES UsbDisplayEvtAdapterCommitModes;
+EVT_IDD_CX_PARSE_MONITOR_DESCRIPTION UsbDisplayEvtParseMonitorDescription;
+EVT_IDD_CX_MONITOR_GET_DEFAULT_DESCRIPTION_MODES UsbDisplayEvtMonitorGetDefaultModes;
+EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES UsbDisplayEvtMonitorQueryTargetModes;
+EVT_IDD_CX_MONITOR_ASSIGN_SWAPCHAIN UsbDisplayEvtMonitorAssignSwapChain;
+EVT_IDD_CX_MONITOR_UNASSIGN_SWAPCHAIN UsbDisplayEvtMonitorUnassignSwapChain;
+

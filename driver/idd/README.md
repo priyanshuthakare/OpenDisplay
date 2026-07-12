@@ -2,28 +2,28 @@
 
 USBDisplay requires a Windows Indirect Display Driver (IDD). The driver is the component that makes Windows expose the Android tablet as a real monitor in Display Settings.
 
-## Driver Responsibilities
+## Implemented Driver Responsibilities
 
 - Register an indirect display adapter.
-- Create one virtual monitor per connected Android tablet.
+- Create a virtual USBDisplay monitor when the adapter reaches D0.
 - Advertise EDID modes:
   - 1920x1080
-  - 2560x1600
-  - 2880x1800
-  - 3200x2000
+  - 2560x1440
   - 3840x2160
 - Advertise refresh rates:
   - 60 Hz
-  - 90 Hz
-  - 120 Hz when the display path can sustain it
+  - 120 Hz for 2560x1440
 - Handle hot plug, unplug, sleep, resume, rotation, and mode changes.
-- Expose frame acquisition to the user-mode streaming service without whole-desktop capture.
+- Consume IddCx swap-chain frames and report frame completion to Windows.
 
 ## Implementation Base
 
-The driver should be implemented from Microsoft's Indirect Display Driver sample and built with the Windows Driver Kit. The sample already contains the correct UMDF/IDD control flow; USBDisplay should replace the sample monitor model with dynamic tablet-backed monitor instances.
+The driver follows Microsoft's Indirect Display Driver sample callback model and replaces the sample monitor data with USBDisplay EDID, naming, modes, and install identity.
 
 ## Driver Boundary
 
 The driver should not encode video, own Android device state, or run transport logic. Those live in `host/streamer`.
 
+## Build and Install
+
+See `BUILDING.md`.
