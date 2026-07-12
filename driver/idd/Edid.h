@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <windows.h>
+#include <wdf.h>
 #include <iddcx.h>
 
 namespace UsbDisplay
@@ -27,4 +28,3 @@ namespace UsbDisplay
     IDDCX_MONITOR_MODE CreateMonitorMode(const DisplayMode& mode, IDDCX_MONITOR_MODE_ORIGIN origin);
     IDDCX_TARGET_MODE CreateTargetMode(const DisplayMode& mode);
 }
-

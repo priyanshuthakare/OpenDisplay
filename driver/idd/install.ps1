@@ -23,14 +23,13 @@ if ($EnableTestSigning) {
 
 & "$root\build.ps1" -Configuration $Configuration
 
-$packageRoot = Join-Path $root "bin\x64\$Configuration"
-$builtDll = Join-Path $packageRoot "USBDisplayIdd.dll"
-if (-not (Test-Path $builtDll)) {
-    throw "Built driver DLL was not found at $builtDll."
+$packageRoot = Join-Path $root "package\x64\$Configuration"
+$packageInf = Join-Path $packageRoot "Driver.inf"
+if (-not (Test-Path $packageInf)) {
+    throw "Packaged driver INF was not found at $packageInf."
 }
 
-Copy-Item -LiteralPath $builtDll -Destination (Join-Path $root "USBDisplayIdd.dll") -Force
-& pnputil /add-driver $inf /install
+& pnputil /add-driver $packageInf /install
 if ($LASTEXITCODE -ne 0) {
     throw "pnputil failed to add the USBDisplay driver package."
 }
@@ -77,4 +76,3 @@ public static class UsbDisplayRootDevice
 [UsbDisplayRootDevice]::Ensure($hardwareId)
 Start-Sleep -Seconds 2
 & "$root\verify.ps1"
-

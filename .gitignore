@@ -12,7 +12,13 @@ local.properties
 .idea/
 .vscode/
 
+# Windows driver build outputs
+driver/idd/.vs/
+driver/idd/bin/
+driver/idd/obj/
+driver/idd/*.user
+driver/idd/package/
+
 # OS
 Thumbs.db
 .DS_Store
-
