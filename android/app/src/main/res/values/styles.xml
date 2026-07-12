@@ -1,0 +1,11 @@
+<resources>
+    <style name="USBDisplayTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:colorAccent">#00A3A3</item>
+    </style>
+</resources>
+

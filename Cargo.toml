@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "protocol",
+    "transport",
+    "host/streamer",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/usbdisplay/usbdisplay"
