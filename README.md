@@ -159,6 +159,7 @@ Today, you can:
 - Build and test the Rust protocol.
 - Run the host CLI probe.
 - Build and install the Android fullscreen client shell.
+- Compile the Android transport decoder used by the future USB receive path.
 - Verify ADB sees the tablet over USB.
 - Use the docs in `docs/` to continue implementing the driver, capture, encoder, transport, decoder, and input layers.
 
