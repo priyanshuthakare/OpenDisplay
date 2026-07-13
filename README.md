@@ -43,16 +43,18 @@ Two slices are implemented today.
 
 - Enumerates a virtual `USBDisplay` monitor with a full 128-byte EDID
 - Loads cleanly (problem code 0) and appears as an additional display adapter
-- Drives an OS-assigned swap chain and renders an animated test pattern to prove
-  the presentation path end to end
+- Drives an OS-assigned swap chain and captures the actual composed contents of
+  the virtual monitor (GPU→CPU surface readback), dumping frames to disk as
+  deterministic proof
 - Extend and Duplicate work in Windows Display Settings
 
 See [docs/idd-driver.md](docs/idd-driver.md) for the driver architecture, the
-frame loop, and the debugging journey behind the current build.
+frame loop, the capture readback, and the debugging journey behind the current
+build.
 
-The GPU capture, encoder, Android decoder, and HID paths are documented with
-contracts and milestones so each subsystem can be implemented without changing
-the protocol shape.
+The hardware encoder, USB transport, Android decoder, and HID paths are
+documented with contracts and milestones so each subsystem can be implemented
+without changing the protocol shape.
 
 ## Status
 
@@ -62,12 +64,11 @@ Windows Indirect Display Driver that enumerates a virtual monitor, host CLI
 skeleton, Android client skeleton, and documentation needed to build the full
 system.
 
-The Windows Indirect Display Driver now enumerates a virtual monitor and renders
-a local test pattern. The Android screen will not show the Windows desktop until
-these remaining pieces are implemented:
+The Windows Indirect Display Driver now enumerates a virtual monitor and
+captures its actual composed contents. The Android screen will not show the
+Windows desktop until these remaining pieces are implemented:
 
-- Virtual monitor capture (replacing the local test pattern)
-- Hardware encoder
+- Hardware encoder (consuming the captured surface)
 - USB or ADB transport session
 - Android `MediaCodec` decoder
 
@@ -180,8 +181,8 @@ Today, you can:
 - Run the host CLI probe.
 - Build, sign, and install the Windows IDD, and see a virtual `USBDisplay`
   monitor enumerate in Windows Display Settings (Extend or Duplicate).
-- Verify the driver's presentation path via the animated test-pattern frames in
-  `%ProgramData%\USBDisplay\frames`.
+- Verify the driver captures the virtual monitor via the frames it writes to
+  `%ProgramData%\USBDisplay\capture`.
 - Build and install the Android fullscreen client shell.
 - Compile the Android transport decoder used by the future USB receive path.
 - Verify ADB sees the tablet over USB.

@@ -173,45 +173,39 @@ namespace UsbDisplay
             ComPtr<IDXGIResource> surface;
             surface.Attach(buffer.MetaData.pSurface);
 
-            // Compose the animated test pattern into our OWN offscreen buffer and dump
-            // it to disk. The acquired surface is the OS-composed desktop for our
-            // monitor, which an IDD CONSUMES (a real driver encodes + sends it); we do
-            // not draw into it. Everything here is wrapped so a transient failure can
-            // never throw out of this worker thread and terminate the UMDF host.
+            // The acquired surface IS the OS-composed image for OUR virtual monitor
+            // (and only that monitor -- an IDD is never handed the desktop or any
+            // other display). Read it back to CPU and, on a cadence, dump it to disk
+            // as deterministic proof of real capture. This is exactly where the
+            // hardware encoder will later consume the same surface. Everything is
+            // wrapped so a transient failure can never throw out of this worker
+            // thread and terminate the UMDF host.
             LARGE_INTEGER now = {}; QueryPerformanceCounter(&now);
-            double elapsed = static_cast<double>(now.QuadPart - start.QuadPart) / freq.QuadPart;
             try
             {
-                if (!m_renderer && surface)
+                if (!m_capturer)
+                {
+                    m_capturer = std::make_unique<FrameCapturer>(m_device->Device, m_device->Context);
+                }
+                // The full-frame GPU->CPU readback is heavy, so validate on the dump
+                // cadence rather than every frame; the encoder milestone consumes the
+                // surface on the GPU (no CPU stall) every frame instead.
+                if (m_capturer && surface && (frameCount % 120) == 0)
                 {
                     ComPtr<ID3D11Texture2D> srcTex;
-                    if (SUCCEEDED(surface.As(&srcTex)))
-                    {
-                        D3D11_TEXTURE2D_DESC td = {};
-                        srcTex->GetDesc(&td);
-                        if (td.Width > 0 && td.Height > 0 && td.Width <= 8192 && td.Height <= 8192)
-                        {
-                            m_renderer = std::make_unique<TestPatternRenderer>(
-                                m_device->Device, m_device->Context, td.Width, td.Height);
-                        }
-                    }
-                }
-                if (m_renderer)
-                {
-                    m_renderer->Render(frameCount, elapsed, fps);
-                    if ((frameCount % 120) == 0)
+                    if (SUCCEEDED(surface.As(&srcTex)) && m_capturer->Capture(srcTex.Get()))
                     {
                         wchar_t path[512];
-                        _snwprintf_s(path, _TRUNCATE, L"%s\\frame_%06llu.bmp",
-                                     m_renderer->OutputDir().c_str(), (unsigned long long)frameCount);
-                        m_renderer->DumpBmp(path);
+                        _snwprintf_s(path, _TRUNCATE, L"%s\\capture_%06llu.bmp",
+                                     m_capturer->OutputDir().c_str(), (unsigned long long)frameCount);
+                        m_capturer->DumpBmp(path);
                     }
                 }
             }
             catch (...)
             {
-                USBLOG_WARN(L"ProcessFrames: test-pattern render threw; disabling renderer");
-                m_renderer.reset();
+                USBLOG_WARN(L"ProcessFrames: capture threw; disabling capture");
+                m_capturer.reset();
             }
 
             if (frameCount == 0 || (frameCount % 60) == 0)

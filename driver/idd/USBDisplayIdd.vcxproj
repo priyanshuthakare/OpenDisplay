@@ -95,8 +95,8 @@
     <ClCompile Include="Device.cpp" />
     <ClCompile Include="Driver.cpp" />
     <ClCompile Include="Edid.cpp" />
+    <ClCompile Include="FrameCapture.cpp" />
     <ClCompile Include="IndirectMonitor.cpp" />
-    <ClCompile Include="RenderTest.cpp" />
     <ClCompile Include="SwapChainProcessor.cpp" />
     <ClCompile Include="Trace.cpp" />
   </ItemGroup>
@@ -104,8 +104,8 @@
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />
     <ClInclude Include="Edid.h" />
+    <ClInclude Include="FrameCapture.h" />
     <ClInclude Include="IndirectMonitor.h" />
-    <ClInclude Include="RenderTest.h" />
     <ClInclude Include="SwapChainProcessor.h" />
     <ClInclude Include="Trace.h" />
   </ItemGroup>

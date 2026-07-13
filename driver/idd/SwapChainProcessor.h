@@ -8,7 +8,7 @@
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
-#include "RenderTest.h"
+#include "FrameCapture.h"
 
 namespace UsbDisplay
 {
@@ -44,6 +44,6 @@ namespace UsbDisplay
         HANDLE m_stopEvent = nullptr;
         HANDLE m_thread = nullptr;
         std::atomic<bool> m_running = false;
-        std::unique_ptr<TestPatternRenderer> m_renderer;
+        std::unique_ptr<FrameCapturer> m_capturer;
     };
 }

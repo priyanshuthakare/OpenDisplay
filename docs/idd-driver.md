@@ -3,13 +3,14 @@
 The `driver/idd` component is a Windows UMDF Indirect Display Driver built on
 IddCx. It presents a virtual `USBDisplay` monitor to the Windows display stack.
 As of this milestone the driver **enumerates a real monitor, loads cleanly
-(problem code 0), and drives an OS-assigned swap chain**, rendering a
-deterministic animated test pattern to prove the presentation path end to end.
+(problem code 0), drives an OS-assigned swap chain, and captures the actual
+composed contents of that virtual monitor** by reading back the swap-chain
+surface it is handed each frame.
 
-This is the first subsystem to move from "documented contract" to "running on
-hardware." Capture, encode, and USB transport are still ahead; the driver
-currently *consumes* the OS-composed surface (as any IDD does) and writes a
-local test pattern instead of encoding and sending frames.
+Encode and USB transport are still ahead; the driver currently reads back the
+virtual monitor surface to a CPU buffer and writes it to disk as deterministic
+proof, which is the exact hand-off point where the hardware encoder will consume
+the same surface.
 
 ## What runs today
 
@@ -17,9 +18,10 @@ local test pattern instead of encoding and sending frames.
   produced by `BuildEdid()`, including the product-name descriptor.
 - The device is `Status: OK`, `Problem: 0`, and appears as an additional
   display adapter (`USBDisplay [OK]`).
-- The swap-chain worker composes an animated test pattern
-  (SMPTE-style colour bars, moving gradient, bouncing square, and an FPS /
-  frame-counter readout) and periodically writes it to disk as BMP.
+- The swap-chain worker reads back the acquired surface (the OS-composed image
+  for our monitor) into a CPU BGRA buffer and periodically writes it to disk as
+  BMP. Consecutive dumps differ, proving live capture rather than a static
+  buffer.
 - Windows Display Settings can Extend or Duplicate onto the virtual monitor.
 
 ## Component map
@@ -30,7 +32,7 @@ local test pattern instead of encoding and sending frames.
 | `Device.cpp/.h` | Adapter lifetime, monitor creation, arrival/departure |
 | `IndirectMonitor.cpp` | Per-monitor swap-chain assignment |
 | `SwapChainProcessor.cpp/.h` | D3D11 render device + the frame-acquire worker thread |
-| `RenderTest.cpp/.h` | `TestPatternRenderer` — CPU-composed animated pattern, BMP dump |
+| `FrameCapture.cpp/.h` | `FrameCapturer` — GPU→CPU readback of the acquired surface, BGRA normalization, BMP dump |
 | `Edid.*` | `BuildEdid()` 128-byte EDID with product-name descriptor |
 | `Trace.cpp/.h` | TraceLogging provider + `USBLOG_*` macros |
 
@@ -45,25 +47,49 @@ the running driver:
    reassigns.
 2. Loop on `IddCxSwapChainReleaseAndAcquireBuffer`, waiting on the new-frame and
    stop events with a 16 ms timeout on `E_PENDING`.
-3. Compose the test pattern into an offscreen buffer via `TestPatternRenderer`
-   and dump a BMP every 120 frames.
+3. Read the acquired surface back to a CPU BGRA buffer via `FrameCapturer` and
+   dump a BMP every 120 frames.
 4. `IddCxSwapChainFinishedProcessingFrame` and repeat.
 
-The renderer writes to `%ProgramData%\USBDisplay\frames` (falling back to the
+### Capture: reading back our own monitor
+
+The surface returned by `IddCxSwapChainReleaseAndAcquireBuffer` is the OS-composed
+image for **our** virtual monitor, allocated on the D3D device we passed to
+`IddCxSwapChainSetDevice`. It can never contain the whole desktop or any other
+display — so "capturing the USBDisplay monitor" is simply reading that surface
+back, with no Desktop Duplication or whole-desktop API involved. `FrameCapturer`
+does the GPU→CPU readback:
+
+1. Lazily create a CPU-readable `D3D11_USAGE_STAGING` texture matching the
+   surface's dimensions and format.
+2. `CopyResource(staging, acquiredSurface)` on the render context.
+3. `Map` the staging texture (blocking, so the copy is complete) and normalize
+   the pixels to 32-bpp BGRA, honoring the mapped `RowPitch` (which is `>=`
+   width×4 and often padded). `B8G8R8A8`, `R8G8B8A8`, and `R10G10B10A2` layouts
+   are handled.
+
+The normalized frame lives in a CPU buffer (`FrameCapturer::Pixels()`) — that is
+the hand-off point for the future hardware encoder, which will instead consume
+the surface on the GPU every frame. The full readback is heavy, so validation
+dumps run on the 120-frame cadence rather than every frame.
+
+`FrameCapturer` writes to `%ProgramData%\USBDisplay\capture` (falling back to the
 temp directory), creating each path component with `kernel32` only so nothing
 extra is loaded into the sandboxed UMDF host.
 
 ## Debugging journey (why the code looks the way it does)
 
-Getting from "installs but no monitor" to "enumerates and renders" surfaced
-several failure modes. The fixes are load-bearing, so they are documented here.
+Getting from "installs but no monitor" to "enumerates, drives a swap chain, and
+captures" surfaced several failure modes. The fixes are load-bearing, so they are
+documented here.
 
-- **Exception guard around rendering.** A transient failure in the render path
-  was throwing out of the swap-chain worker thread and terminating the UMDF
+- **Exception guard around the frame work.** A transient failure in the per-frame
+  path was throwing out of the swap-chain worker thread and terminating the UMDF
   host, which showed up as periodic crashes in the System log. The frame loop
-  now wraps all rendering in `try { ... } catch (...)`, and on any throw it logs
-  a warning and disables the renderer rather than taking down the host. This was
-  the fix that turned intermittent crashes into a stable device. (Crash entries
+  now wraps all per-frame work in `try { ... } catch (...)`, and on any throw it
+  logs a warning and disables the offending stage rather than taking down the
+  host. This was the fix that turned intermittent crashes into a stable device.
+  (Crash entries
   in the System log dated before the current install are stale — the clean start
   has no crash after it.)
 - **Adapter lifetime guard.** `D0Entry` can fire again after a `D0Exit` (power
@@ -79,8 +105,10 @@ several failure modes. The fixes are load-bearing, so they are documented here.
   HRESULTs via `USBLOG_*`, so the full PnP/power/IddCx sequence
   (`DeviceAdd → D0Entry → InitializeAdapter → AdapterInitFinished →
   CreateMonitor → MonitorArrival → AssignSwapChain`) is observable in DebugView.
-- **Bounds-checked surface sizing.** The renderer is only created once the
-  acquired surface reports sane dimensions (`0 < w,h ≤ 8192`).
+- **Bounds-checked surface sizing.** The capturer only creates its staging
+  texture once the acquired surface reports sane dimensions (`0 < w,h ≤ 8192`)
+  and rejects multisampled surfaces (which cannot be copied to a plain staging
+  texture).
 
 ## Verifying
 
@@ -90,18 +118,25 @@ package installed, UMDF reflector (WUDFRd), ROOT device present, driver loaded
 decoded EDID. It also decodes common CM problem codes (28/31/37/39/41) to make
 install failures self-explaining.
 
-To confirm the rendered pattern is live:
+To confirm capture is live:
 
 ```powershell
-Get-ChildItem "$env:ProgramData\USBDisplay\frames" | Select Name,Length,LastWriteTime
+Get-ChildItem "$env:ProgramData\USBDisplay\capture" | Select Name,Length,LastWriteTime
 ```
 
-Expect `frame_000000.bmp`, `frame_000120.bmp`, … growing over time. Open the
-newest in an image viewer to see the animation.
+Expect `capture_000000.bmp`, `capture_000120.bmp`, … growing over time. Open the
+newest in an image viewer to see the actual virtual-monitor contents (extend a
+window onto the USBDisplay monitor first, or it may be blank wallpaper).
+Consecutive dumps should differ, which proves live capture rather than a static
+buffer.
+
+> Reinstalling a changed driver: PnP keys the driver store on the INF
+> `DriverVer`. If you rebuild the DLL without bumping `DriverVer`, `pnputil`
+> reports "up-to-date" and keeps running the **old** binary. Bump `DriverVer`
+> (and/or run `uninstall.ps1` first) when validating driver changes.
 
 ## Not yet implemented
 
-- Capturing the OS-composed surface instead of drawing a local pattern.
 - Hardware encode of captured frames.
 - USB transport of encoded frames to the Android client.
 - Input return path (HID injection).

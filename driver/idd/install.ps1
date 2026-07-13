@@ -26,20 +26,21 @@ try {
     Write-Host "Could not enable DriverFrameworks-UserMode/Operational log: $($_.Exception.Message)"
 }
 
-# Create the test-pattern frame dump directory with a permissive ACL so the
-# LocalService WUDFHost process can write BMPs there. The driver writes animated
-# test-pattern frames to %ProgramData%\USBDisplay\frames as visual proof.
+# Create the capture output directory with a permissive ACL so the LocalService
+# WUDFHost process can write BMPs there. The driver reads back the virtual
+# monitor surface and writes captured frames to %ProgramData%\USBDisplay\capture
+# as deterministic proof of real capture.
 try {
-    $framesDir = Join-Path $env:ProgramData "USBDisplay\frames"
-    New-Item -ItemType Directory -Force -Path $framesDir | Out-Null
-    $acl = Get-Acl $framesDir
+    $captureDir = Join-Path $env:ProgramData "USBDisplay\capture"
+    New-Item -ItemType Directory -Force -Path $captureDir | Out-Null
+    $acl = Get-Acl $captureDir
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
         "Everyone", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
     $acl.AddAccessRule($rule)
-    Set-Acl -Path $framesDir -AclObject $acl
-    Write-Host "Test-pattern frames will be written to: $framesDir"
+    Set-Acl -Path $captureDir -AclObject $acl
+    Write-Host "Captured frames will be written to: $captureDir"
 } catch {
-    Write-Host "Could not prepare frames directory: $($_.Exception.Message)"
+    Write-Host "Could not prepare capture directory: $($_.Exception.Message)"
 }
 
 function Get-DevGen {

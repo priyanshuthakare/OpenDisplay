@@ -19,9 +19,9 @@ flowchart LR
 The IDD is responsible for monitor identity, EDID, modes, hot plug, and display topology. It is the reason Windows can extend, duplicate, rotate, and drag windows onto the tablet.
 
 The driver is implemented and enumerates a virtual `USBDisplay` monitor today.
-It currently renders a local animated test pattern from the swap-chain worker to
-prove the presentation path; capture of the OS-composed surface replaces this in
-a later slice. See [idd-driver.md](idd-driver.md) for detail.
+It captures the monitor's composed contents by reading back the swap-chain
+surface it is handed each frame; the hardware encoder consumes that same surface
+in a later slice. See [idd-driver.md](idd-driver.md) for detail.
 
 ## Host Streaming Service
 

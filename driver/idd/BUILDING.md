@@ -97,20 +97,26 @@ installed, WUDFRd reflector, ROOT device, driver loaded with problem code 0,
 adapter count, display count, and the `USBDisplay` monitor with decoded EDID),
 and decodes common CM problem codes (28/31/37/39/41) when a gate fails.
 
-## Verify Rendering
+## Verify Capture
 
-Once the monitor is enumerated, the swap-chain worker renders an animated test
-pattern and dumps a frame every 120 frames:
+Once the monitor is enumerated, the swap-chain worker reads back the acquired
+monitor surface and dumps a captured frame every 120 frames:
 
 ```powershell
-Get-ChildItem "$env:ProgramData\USBDisplay\frames" | Select Name,Length,LastWriteTime
+Get-ChildItem "$env:ProgramData\USBDisplay\capture" | Select Name,Length,LastWriteTime
 ```
 
-Expect `frame_000000.bmp`, `frame_000120.bmp`, … growing over time. Open the
-newest in an image viewer to see the colour bars, moving gradient, bouncing
-square, and FPS / frame-counter readout. This proves the presentation path end
-to end before capture and encode are added. See
+Expect `capture_000000.bmp`, `capture_000120.bmp`, … growing over time. Open the
+newest in an image viewer to see the actual contents of the USBDisplay virtual
+monitor (extend a window onto it first, or it may show blank wallpaper).
+Consecutive dumps differ, which proves live capture. This is the deterministic
+validation of real monitor capture before an encoder is added. See
 [../../docs/idd-driver.md](../../docs/idd-driver.md) for the full architecture.
+
+> When validating a rebuilt driver, bump `DriverVer` in `Driver.inf` (or run
+> `uninstall.ps1` first). PnP keys the driver store on `DriverVer`; without a
+> bump, `pnputil` keeps the previously installed binary and reports it
+> "up-to-date."
 
 ## Uninstall
 
