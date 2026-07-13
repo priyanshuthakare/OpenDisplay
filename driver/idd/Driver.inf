@@ -1,62 +1,77 @@
+; USBDisplayIdd.inf - Indirect Display Driver (IddCx / UMDF 2) installation.
+;
+; Structured after the Microsoft IddCx sample (video/IndirectDisplay). The three
+; things that make an IddCx device actually START (vs. CM_PROB_FAILED_ADD) are:
+;   * UmdfExtensions = IddCx0102          -> loads the IddCx class extension in the host
+;   * UpperFilters   = IndirectKmd        -> joins the kernel display stack
+;   * UmdfKernelModeClientPolicy = AllowKernelModeClients -> lets IndirectKmd (kernel) open us
+; Reflector/service wiring is delegated to WUDFRD.inf via Include/Needs (supported path).
+
 [Version]
-Signature="$WINDOWS NT$"
-Class=Display
-ClassGuid={4d36e968-e325-11ce-bfc1-08002be10318}
-Provider=%ManufacturerName%
-DriverVer=07/12/2026,0.1.0.0
-CatalogFile=USBDisplayIdd.cat
-PnpLockdown=1
+Signature   = "$WINDOWS NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = USBDisplayIdd.cat
+DriverVer   = 07/12/2026,0.1.0.0
+PnpLockdown = 1
 
 [Manufacturer]
-%ManufacturerName%=USBDisplay,NTamd64
+%ManufacturerName% = USBDisplay, NTamd64
 
 [USBDisplay.NTamd64]
-%USBDisplayDeviceName%=USBDisplay_Install, Root\USBDisplayIdd
+%USBDisplayDeviceName% = USBDisplay_Install, Root\USBDisplayIdd
 
 [SourceDisksNames]
-1=%DiskName%,,,
+1 = %DiskName%
 
 [SourceDisksFiles]
-USBDisplayIdd.dll=1
+USBDisplayIdd.dll = 1
 
 [DestinationDirs]
-USBDisplay_CopyFiles=13
+UMDriverCopy = 12, UMDF   ; %SystemRoot%\System32\drivers\UMDF
 
+; ---------------------------------------------------------------------------
+; Device install
+; ---------------------------------------------------------------------------
 [USBDisplay_Install.NT]
-CopyFiles=USBDisplay_CopyFiles
+Include   = WUDFRD.inf
+Needs     = WUDFRD.NT
+CopyFiles = UMDriverCopy
 
-[USBDisplay_CopyFiles]
-USBDisplayIdd.dll
+[USBDisplay_Install.NT.hw]
+Include = WUDFRD.inf
+Needs   = WUDFRD.NT.HW
+AddReg  = USBDisplay_HardwareDeviceSettings
+
+[USBDisplay_HardwareDeviceSettings]
+HKR,, "UpperFilters",  %REG_MULTI_SZ%, "IndirectKmd"
+HKR,, "FriendlyName",  %REG_SZ%,       "USBDisplay"
 
 [USBDisplay_Install.NT.Services]
-AddService=WUDFRd,0x000001fa,WUDFRd_ServiceInstall
-
-[WUDFRd_ServiceInstall]
-DisplayName=%WUDFRdDisplayName%
-ServiceType=1
-StartType=3
-ErrorControl=1
-ServiceBinary=%12%\WUDFRd.sys
-LoadOrderGroup=Base
+Include = WUDFRD.inf
+Needs   = WUDFRD.NT.Services
 
 [USBDisplay_Install.NT.Wdf]
-UmdfService=USBDisplayIdd,USBDisplay_UmdfService
-UmdfServiceOrder=USBDisplayIdd
+UmdfService                = USBDisplayIdd, USBDisplay_UmdfInstall
+UmdfServiceOrder           = USBDisplayIdd
+UmdfKernelModeClientPolicy = AllowKernelModeClients
 
-[USBDisplay_UmdfService]
-UmdfLibraryVersion=2.0
-ServiceBinary=%13%\USBDisplayIdd.dll
-DriverCLSID={B32645F8-DA0B-4D0E-A282-0B1B2E7C041C}
+[USBDisplay_UmdfInstall]
+; UMDF 2.25 is a valid runtime on this OS (verified: HidCfu/StorFwUpdate load at 2.25,
+; NetAdapterCx at 2.31). Binary links the 2.25 UMDF stub, so INF matches at 2.25.
+UmdfLibraryVersion = 2.25.0
+ServiceBinary      = %12%\UMDF\USBDisplayIdd.dll
+UmdfExtensions     = IddCx0102
 
-[USBDisplay_Install.NT.HW]
-AddReg=USBDisplay_HardwareKeys
+[UMDriverCopy]
+USBDisplayIdd.dll
 
-[USBDisplay_HardwareKeys]
-HKR,,"FriendlyName",0x00000000,"USBDisplay"
-
+; ---------------------------------------------------------------------------
 [Strings]
-ManufacturerName="USBDisplay"
-USBDisplayDeviceName="USBDisplay Indirect Display Adapter"
-WUDFRdDisplayName="Windows Driver Foundation - User-mode Driver Framework Reflector"
-DiskName="USBDisplay Indirect Display Driver Installation Disk"
+ManufacturerName     = "USBDisplay"
+USBDisplayDeviceName = "USBDisplay Indirect Display Adapter"
+DiskName             = "USBDisplay Indirect Display Driver Installation Disk"
 
+REG_MULTI_SZ = 0x00010000
+REG_SZ       = 0x00000000

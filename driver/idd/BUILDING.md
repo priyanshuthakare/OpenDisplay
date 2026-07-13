@@ -12,12 +12,61 @@ The driver cannot build with the Windows SDK alone. The WDK installation must in
 
 ## Build
 
-From an elevated or normal PowerShell session:
+From an elevated PowerShell session:
 
 ```powershell
 cd driver\idd
 .\build.ps1 -Configuration Release
 ```
+
+The build script:
+
+1. Builds `USBDisplayIdd.dll`.
+2. Creates `package\x64\Release`.
+3. Copies `USBDisplayIdd.dll` and `Driver.inf` into the package.
+4. Runs `Inf2Cat` to create `usbdisplayidd.cat`.
+5. Detects `signtool.exe`.
+6. Creates a local development code-signing certificate if needed.
+7. Installs that certificate into:
+   - `LocalMachine\Root`
+   - `LocalMachine\TrustedPublisher`
+8. Signs `usbdisplayidd.cat`.
+9. Signs `USBDisplayIdd.dll`.
+10. Verifies the package is ready for `pnputil`.
+
+The signing certificate subject is:
+
+```text
+CN=USBDisplay Development Driver Signing
+```
+
+The first signed build must run elevated because creating and trusting a LocalMachine certificate requires administrator rights. Later builds can reuse the existing certificate, but elevated PowerShell is still recommended for local driver development.
+
+To compile and package without signing:
+
+```powershell
+.\build.ps1 -Configuration Release -SkipSigning
+```
+
+## Verify Signing
+
+```powershell
+cd driver\idd
+.\verify-signing.ps1 -Configuration Release
+```
+
+The verifier reports:
+
+- certificate found
+- certificate trusted in root
+- certificate trusted as publisher
+- signtool found
+- catalog signed
+- DLL signed
+- timestamp presence
+- ready for `pnputil`
+
+Timestamping uses `http://timestamp.digicert.com` by default. If timestamping is unavailable during offline development, the package is still signed and can be installed on a test-signing-enabled machine as long as the certificate is trusted locally.
 
 ## Install For Local Testing
 
@@ -43,3 +92,34 @@ Expected result:
 - Windows monitor enumeration exposes a monitor named `USBDisplay`.
 - Windows Display Settings can use the monitor for Extend or Duplicate mode.
 
+`verify.ps1` prints a PASS/FAIL summary across the milestone gates (package
+installed, WUDFRd reflector, ROOT device, driver loaded with problem code 0,
+adapter count, display count, and the `USBDisplay` monitor with decoded EDID),
+and decodes common CM problem codes (28/31/37/39/41) when a gate fails.
+
+## Verify Rendering
+
+Once the monitor is enumerated, the swap-chain worker renders an animated test
+pattern and dumps a frame every 120 frames:
+
+```powershell
+Get-ChildItem "$env:ProgramData\USBDisplay\frames" | Select Name,Length,LastWriteTime
+```
+
+Expect `frame_000000.bmp`, `frame_000120.bmp`, … growing over time. Open the
+newest in an image viewer to see the colour bars, moving gradient, bouncing
+square, and FPS / frame-counter readout. This proves the presentation path end
+to end before capture and encode are added. See
+[../../docs/idd-driver.md](../../docs/idd-driver.md) for the full architecture.
+
+## Uninstall
+
+From an elevated PowerShell session:
+
+```powershell
+cd driver\idd
+.\uninstall.ps1
+```
+
+This removes the `USBDisplay` device node and deletes the driver package from
+the driver store. Run a hardware rescan or reboot if a stale node remains.

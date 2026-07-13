@@ -1,7 +1,7 @@
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
-    [switch]$EnableTestSigning
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,68 +11,105 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$inf = Join-Path $root "Driver.inf"
-$hardwareId = "ROOT\USBDisplayIdd"
+$hardwareId = "Root\USBDisplayIdd"
 
-if ($EnableTestSigning) {
-    & bcdedit /set testsigning on
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to enable Windows test signing."
-    }
+# NOTE: This installer assumes Windows test signing is already ON for the self-signed
+# development certificate (bcdedit /set testsigning on + reboot). It intentionally does
+# NOT change boot configuration. Verify with: bcdedit /enum {current} | findstr testsigning
+
+# Enable the UMDF operational event log so verify.ps1 and Event Viewer show rich
+# reflector/driver events during bring-up (disabled by default on most machines).
+try {
+    & wevtutil sl "Microsoft-Windows-DriverFrameworks-UserMode/Operational" /e:true 2>&1 | Out-Null
+    Write-Host "Enabled DriverFrameworks-UserMode/Operational event log."
+} catch {
+    Write-Host "Could not enable DriverFrameworks-UserMode/Operational log: $($_.Exception.Message)"
 }
 
-& "$root\build.ps1" -Configuration $Configuration
+# Create the test-pattern frame dump directory with a permissive ACL so the
+# LocalService WUDFHost process can write BMPs there. The driver writes animated
+# test-pattern frames to %ProgramData%\USBDisplay\frames as visual proof.
+try {
+    $framesDir = Join-Path $env:ProgramData "USBDisplay\frames"
+    New-Item -ItemType Directory -Force -Path $framesDir | Out-Null
+    $acl = Get-Acl $framesDir
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "Everyone", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $acl.AddAccessRule($rule)
+    Set-Acl -Path $framesDir -AclObject $acl
+    Write-Host "Test-pattern frames will be written to: $framesDir"
+} catch {
+    Write-Host "Could not prepare frames directory: $($_.Exception.Message)"
+}
+
+function Get-DevGen {
+    $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "devgen.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\x64\\devgen.exe$" } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if (-not $tool) {
+        throw "devgen.exe was not found. Install the Windows Driver Kit (WDK) Tools."
+    }
+    return $tool.FullName
+}
+
+# 1. Build + sign the driver package (unless skipped).
+if (-not $SkipBuild) {
+    & "$root\build.ps1" -Configuration $Configuration
+}
 
 $packageRoot = Join-Path $root "package\x64\$Configuration"
 $packageInf = Join-Path $packageRoot "Driver.inf"
 if (-not (Test-Path $packageInf)) {
-    throw "Packaged driver INF was not found at $packageInf."
+    throw "Packaged driver INF was not found at $packageInf. Run build.ps1 first."
 }
 
-& pnputil /add-driver $packageInf /install
+# 2. Confirm signing is valid before asking PnP to trust the package.
+& "$root\verify-signing.ps1" -Configuration $Configuration | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    throw "pnputil failed to add the USBDisplay driver package."
+    throw "USBDisplay driver package failed signing verification; aborting install."
 }
 
-Add-Type -Language CSharp @"
-using System;
-using System.Runtime.InteropServices;
+# 2. Confirm signing is valid before asking PnP to trust the package.
+& "$root\verify-signing.ps1" -Configuration $Configuration | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "USBDisplay driver package failed signing verification; aborting install."
+}
 
-public static class UsbDisplayRootDevice
-{
-    private const int CR_SUCCESS = 0;
-    private const int CM_CREATE_DEVNODE_NORMAL = 0;
-    private const int CM_REENUMERATE_NORMAL = 0;
+# 3. Create (or reuse) the persistent ROOT device node FIRST, so that the driver
+#    package install in the next step has a present device to bind to. (pnputil
+#    /install only binds to devices present at install time.)
+$existing = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object {
+    ((Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data -join ';') -match 'USBDisplayIdd'
+}
 
-    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
-    private static extern int CM_Locate_DevNode(out IntPtr pdnDevInst, string pDeviceID, int ulFlags);
-
-    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
-    private static extern int CM_Create_DevNode(out IntPtr pdnDevInst, string pDeviceID, IntPtr dnParent, int ulFlags);
-
-    [DllImport("cfgmgr32.dll")]
-    private static extern int CM_Reenumerate_DevNode(IntPtr dnDevInst, int ulFlags);
-
-    public static void Ensure(string hardwareId)
-    {
-        IntPtr devInst;
-        int locate = CM_Locate_DevNode(out devInst, hardwareId, 0);
-        if (locate == CR_SUCCESS)
-        {
-            CM_Reenumerate_DevNode(devInst, CM_REENUMERATE_NORMAL);
-            return;
-        }
-
-        int create = CM_Create_DevNode(out devInst, hardwareId, IntPtr.Zero, CM_CREATE_DEVNODE_NORMAL);
-        if (create != CR_SUCCESS)
-        {
-            throw new InvalidOperationException("CM_Create_DevNode failed with ConfigManager code " + create);
-        }
-        CM_Reenumerate_DevNode(devInst, CM_REENUMERATE_NORMAL);
+if ($existing) {
+    Write-Host "USBDisplay device node already present:"
+    $existing | ForEach-Object { Write-Host ("  {0}  [{1}]" -f $_.InstanceId, $_.Status) }
+} else {
+    $devgen = Get-DevGen
+    Write-Host "Creating persistent ROOT device node via devgen: $hardwareId"
+    $devgenOutput = & $devgen /add /bus ROOT /hardwareid $hardwareId 2>&1
+    $devgenOutput | ForEach-Object { Write-Host "  $_" }
+    if ($LASTEXITCODE -ne 0) {
+        throw "devgen failed to create the ROOT\USBDisplayIdd device node (exit $LASTEXITCODE)."
     }
+    Start-Sleep -Seconds 2
 }
-"@
 
-[UsbDisplayRootDevice]::Ensure($hardwareId)
-Start-Sleep -Seconds 2
+# 4. Add the driver package to the driver store AND install it onto the now-present
+#    device. /install binds the package to any matching present device.
+Write-Host "Adding driver package to the driver store and installing onto the device..."
+& pnputil /add-driver $packageInf /install
+if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 259) {
+    throw "pnputil failed to add the USBDisplay driver package (exit $LASTEXITCODE)."
+}
+
+# 5. Nudge PnP to (re)evaluate drivers for the device in case it was created
+#    before the package was in the store.
+& pnputil /scan-devices 2>&1 | Out-Null
+
+# 5. Report status.
+Write-Host ""
+Write-Host "Running verification..."
 & "$root\verify.ps1"

@@ -46,6 +46,7 @@ namespace UsbDisplay
     private:
         WDFDEVICE m_wdfDevice = nullptr;
         IDDCX_ADAPTER m_adapter = nullptr;
+        bool m_adapterInitStarted = false;
         std::array<IDDCX_MONITOR, MaxVirtualMonitors> m_monitorHandles{};
     };
 }

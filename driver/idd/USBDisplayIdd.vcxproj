@@ -12,46 +12,77 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{6FD8A63C-C684-4D96-84B6-1CE03B2160D5}</ProjectGuid>
-    <Keyword>Win32Proj</Keyword>
     <RootNamespace>USBDisplayIdd</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
-    <DriverType>WDM</DriverType>
-    <PlatformToolset>WindowsUserModeDriver10.0</PlatformToolset>
+    <!-- Headers/libs + the WDK-present version gate key off TargetPlatformVersion
+         (26100 = OS match, now installed). But the 26100 WDK ships only the VS17
+         build-task assembly; this is VS18. WDKBuildFolder selects which build\<ver>
+         props + task DLLs load, so point it at 28000 (which has the .18.0 tasks)
+         while the compile still uses the 26100 headers. -->
+    <WDKBuildFolder>10.0.28000.0</WDKBuildFolder>
     <TargetName>USBDisplayIdd</TargetName>
+    <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <!-- UMDF 2 Indirect Display Driver, built the WDK way. Setting DriverType=UMDF,
+       IndirectDisplayDriver=true and the UMDF/IDDCX version PROPERTIES lets the
+       WindowsUserModeDriver10.0 toolset auto-wire the IddCx include/lib paths, link
+       IddCxStub.lib, and emit the correct class-bind info that the OS validates
+       before DriverEntry. This is exactly how the Microsoft IddSampleDriver builds. -->
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <PlatformToolset>WindowsUserModeDriver10.0</PlatformToolset>
     <UseDebugLibraries>true</UseDebugLibraries>
+    <DriverType>UMDF</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
+    <UMDF_VERSION_MINOR>25</UMDF_VERSION_MINOR>
+    <IndirectDisplayDriver>true</IndirectDisplayDriver>
+    <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
+    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <TargetVersion>Windows10</TargetVersion>
+    <SpectreMitigation>false</SpectreMitigation>
+    <Driver_SpectreMitigation>false</Driver_SpectreMitigation>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <PlatformToolset>WindowsUserModeDriver10.0</PlatformToolset>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <DriverType>UMDF</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
+    <UMDF_VERSION_MINOR>25</UMDF_VERSION_MINOR>
+    <IndirectDisplayDriver>true</IndirectDisplayDriver>
+    <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
+    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <TargetVersion>Windows10</TargetVersion>
+    <SpectreMitigation>false</SpectreMitigation>
+    <Driver_SpectreMitigation>false</Driver_SpectreMitigation>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
     <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)bin\obj\$(Platform)\$(Configuration)\</IntDir>
     <TargetExt>.dll</TargetExt>
-    <SpectreMitigation>false</SpectreMitigation>
+    <!-- build.ps1 does packaging (copy to package\) + Inf2Cat + signing itself, so
+         disable the WDK's in-build INF/catalog + package steps to avoid a duplicate
+         inf2cat run that fails on the raw source layout. -->
+    <EnableInf2cat>false</EnableInf2cat>
+    <DriverPackageType>None</DriverPackageType>
+    <SignMode>Off</SignMode>
+    <GenerateDriverPackage>false</GenerateDriverPackage>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <TreatWarningAsError>true</TreatWarningAsError>
       <WarningLevel>Level4</WarningLevel>
-      <AdditionalIncludeDirectories>$(UniversalCRT_IncludePath);$(WindowsSDK_IncludePath);$(WindowsSdkDir)Include\wdf\umdf\2.35;$(WindowsSdkDir)Include\10.0.28000.0\um\iddcx\1.11;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=0x1B00;IDDCX_MINIMUM_VERSION_REQUIRED=0x1900;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=4;IDDCX_MINIMUM_VERSION_REQUIRED=4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DisableSpecificWarnings>4005;4324;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>IddCxStub.lib;WdfDriverStubUm.lib;d3d11.lib;dxgi.lib;avrt.lib;runtimeobject.lib;vcruntime.lib;ucrt.lib;ntdll.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(VCToolsInstallDir)lib\$(Platform);$(VCToolsInstallDir)lib\onecore\$(Platform);$(WindowsSdkDir)Lib\10.0.26100.0\ucrt\$(Platform);$(WindowsSdkDir)Lib\10.0.28000.0\um\$(Platform)\iddcx\1.11;$(WindowsSdkDir)Lib\wdf\umdf\$(Platform)\2.35;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <SubSystem>Windows</SubSystem>
-      <EntryPointSymbol>DriverEntry</EntryPointSymbol>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;avrt.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf>
       <TimeStamp>0.1.0.0</TimeStamp>
@@ -65,14 +96,18 @@
     <ClCompile Include="Driver.cpp" />
     <ClCompile Include="Edid.cpp" />
     <ClCompile Include="IndirectMonitor.cpp" />
+    <ClCompile Include="RenderTest.cpp" />
     <ClCompile Include="SwapChainProcessor.cpp" />
+    <ClCompile Include="Trace.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />
     <ClInclude Include="Edid.h" />
     <ClInclude Include="IndirectMonitor.h" />
+    <ClInclude Include="RenderTest.h" />
     <ClInclude Include="SwapChainProcessor.h" />
+    <ClInclude Include="Trace.h" />
   </ItemGroup>
   <ItemGroup>
     <Inf Include="Driver.inf" />

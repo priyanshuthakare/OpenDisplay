@@ -2,7 +2,8 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [ValidateSet("x64")]
-    [string]$Platform = "x64"
+    [string]$Platform = "x64",
+    [switch]$SkipSigning
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +55,13 @@ if ($inf2Cat) {
     & $inf2Cat.FullName /driver:$packageDir /os:10_X64
     if ($LASTEXITCODE -ne 0) {
         throw "Inf2Cat failed with exit code $LASTEXITCODE."
+    }
+}
+
+if (-not $SkipSigning) {
+    & "$root\sign-driver.ps1" -Configuration $Configuration -Platform $Platform
+    if ($LASTEXITCODE -ne 0) {
+        throw "USBDisplay IDD signing failed with exit code $LASTEXITCODE."
     }
 }
 

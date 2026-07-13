@@ -1,4 +1,5 @@
 #include "Device.h"
+#include "Trace.h"
 
 #include <algorithm>
 #include <objbase.h>
@@ -16,6 +17,15 @@ namespace UsbDisplay
 
     NTSTATUS Device::InitializeAdapter()
     {
+        // The adapter is created once for the lifetime of the device. D0Entry can
+        // fire again after a D0Exit (e.g. power transitions); creating a second
+        // adapter would leak the first and confuse IddCx, so guard against it.
+        if (m_adapterInitStarted)
+        {
+            USBLOG_INFO(L"InitializeAdapter: adapter already initialized; skipping");
+            return STATUS_SUCCESS;
+        }
+
         IDDCX_ADAPTER_CAPS caps = {};
         caps.Size = sizeof(caps);
         caps.MaxMonitorsSupported = MaxVirtualMonitors;
@@ -45,9 +55,15 @@ namespace UsbDisplay
         const NTSTATUS status = IddCxAdapterInitAsync(&adapterInit, &adapterInitOut);
         if (NT_SUCCESS(status))
         {
+            m_adapterInitStarted = true;
             m_adapter = adapterInitOut.AdapterObject;
             auto* context = WdfObjectGet_DeviceContext(m_adapter);
             context->Instance = this;
+            USBLOG_INFO(L"InitializeAdapter: IddCxAdapterInitAsync started (adapter=%p)", m_adapter);
+        }
+        else
+        {
+            USBLOG_ERROR(L"InitializeAdapter: IddCxAdapterInitAsync failed 0x%08X", status);
         }
         return status;
     }
@@ -56,9 +72,11 @@ namespace UsbDisplay
     {
         if (!NT_SUCCESS(initStatus))
         {
+            USBLOG_ERROR(L"AdapterInitFinished: adapter init failed 0x%08X", initStatus);
             return initStatus;
         }
 
+        USBLOG_INFO(L"AdapterInitFinished: adapter ready; creating monitor 0");
         return CreateMonitor(0);
     }
 
@@ -109,19 +127,27 @@ namespace UsbDisplay
         NTSTATUS status = IddCxMonitorCreate(m_adapter, &create, &createOut);
         if (!NT_SUCCESS(status))
         {
+            USBLOG_ERROR(L"CreateMonitor: IddCxMonitorCreate failed 0x%08X (connector=%u)", status, connectorIndex);
             return status;
         }
 
         auto* wrapper = WdfObjectGet_IndirectMonitorContext(createOut.MonitorObject);
         wrapper->Monitor = new IndirectMonitor(createOut.MonitorObject);
         m_monitorHandles[connectorIndex] = createOut.MonitorObject;
+        USBLOG_INFO(L"CreateMonitor: monitor created (connector=%u, monitor=%p); signaling arrival",
+            connectorIndex, createOut.MonitorObject);
 
         IDARG_OUT_MONITORARRIVAL arrival = {};
         status = IddCxMonitorArrival(createOut.MonitorObject, &arrival);
         if (!NT_SUCCESS(status))
         {
+            USBLOG_ERROR(L"CreateMonitor: IddCxMonitorArrival failed 0x%08X (connector=%u)", status, connectorIndex);
             WdfObjectDelete(reinterpret_cast<WDFOBJECT>(createOut.MonitorObject));
             m_monitorHandles[connectorIndex] = nullptr;
+        }
+        else
+        {
+            USBLOG_INFO(L"CreateMonitor: MonitorArrival succeeded (connector=%u) -- monitor should now enumerate", connectorIndex);
         }
         return status;
     }
@@ -132,6 +158,7 @@ namespace UsbDisplay
         {
             if (monitor)
             {
+                USBLOG_INFO(L"RemoveAllMonitors: departing monitor %p", monitor);
                 IddCxMonitorDeparture(monitor);
                 WdfObjectDelete(reinterpret_cast<WDFOBJECT>(monitor));
                 monitor = nullptr;

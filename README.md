@@ -29,7 +29,9 @@ scripts/               Build and packaging scripts
 
 ## Current Implementation Slice
 
-The first implemented slice is the shared USB stream protocol:
+Two slices are implemented today.
+
+**Shared USB stream protocol:**
 
 - Fixed binary frame header
 - Timestamp, codec, flags, payload length, sequence number, and CRC32
@@ -37,16 +39,34 @@ The first implemented slice is the shared USB stream protocol:
 - Reliable transport packet layer with ACK, heartbeat, CRC, retransmit-window bookkeeping, and reassembly
 - Rust tests for round trips, CRC rejection, and fragmentation
 
-The Windows IDD, GPU capture, encoder, Android decoder, and HID paths are documented with contracts and milestones so each subsystem can be implemented without changing the protocol shape.
+**Windows Indirect Display Driver (IDD):**
+
+- Enumerates a virtual `USBDisplay` monitor with a full 128-byte EDID
+- Loads cleanly (problem code 0) and appears as an additional display adapter
+- Drives an OS-assigned swap chain and renders an animated test pattern to prove
+  the presentation path end to end
+- Extend and Duplicate work in Windows Display Settings
+
+See [docs/idd-driver.md](docs/idd-driver.md) for the driver architecture, the
+frame loop, and the debugging journey behind the current build.
+
+The GPU capture, encoder, Android decoder, and HID paths are documented with
+contracts and milestones so each subsystem can be implemented without changing
+the protocol shape.
 
 ## Status
 
-USBDisplay is not yet a usable second-monitor application. The repository currently contains the project structure, protocol implementation, host CLI skeleton, Android client skeleton, and documentation needed to build the full system.
+USBDisplay is not yet a usable second-monitor application. The repository
+currently contains the project structure, protocol implementation, a working
+Windows Indirect Display Driver that enumerates a virtual monitor, host CLI
+skeleton, Android client skeleton, and documentation needed to build the full
+system.
 
-The Android screen will not show the Windows desktop until these pieces are implemented:
+The Windows Indirect Display Driver now enumerates a virtual monitor and renders
+a local test pattern. The Android screen will not show the Windows desktop until
+these remaining pieces are implemented:
 
-- Windows Indirect Display Driver
-- Virtual monitor capture
+- Virtual monitor capture (replacing the local test pattern)
 - Hardware encoder
 - USB or ADB transport session
 - Android `MediaCodec` decoder
@@ -158,16 +178,19 @@ Today, you can:
 
 - Build and test the Rust protocol.
 - Run the host CLI probe.
+- Build, sign, and install the Windows IDD, and see a virtual `USBDisplay`
+  monitor enumerate in Windows Display Settings (Extend or Duplicate).
+- Verify the driver's presentation path via the animated test-pattern frames in
+  `%ProgramData%\USBDisplay\frames`.
 - Build and install the Android fullscreen client shell.
 - Compile the Android transport decoder used by the future USB receive path.
 - Verify ADB sees the tablet over USB.
-- Use the docs in `docs/` to continue implementing the driver, capture, encoder, transport, decoder, and input layers.
+- Use the docs in `docs/` to continue implementing capture, encoder, transport, decoder, and input layers.
 
 You cannot yet:
 
 - Extend the Windows desktop to Android.
 - Duplicate the Windows desktop to Android.
-- Change tablet display resolution from Windows.
 - Use touch or stylus as Windows input.
 - Stream real frames from Windows to Android.
 
