@@ -52,6 +52,15 @@ Milestones:
 - Add adaptive buffering and decoder backpressure.
 - Add 60 fps and 120 fps validation.
 
+Status: the client decodes H.264/H.265 with `MediaCodec` to a `SurfaceView`.
+Frames are now paced: a pure `FramePacer` maps each frame's presentation
+timestamp to a `System.nanoTime` deadline anchored on the first frame, and the
+decoder presents via the timestamped `releaseOutputBuffer(index, presentNs)` so
+bursty USB arrival is smoothed to the encoded cadence. Backpressure is applied
+by draining output and retrying instead of dropping payloads when the decoder is
+full. Still open: adaptive buffering tuning and on-device 60/120 fps latency
+validation (needs hardware).
+
 ## Phase 6: Input
 
 Milestones:

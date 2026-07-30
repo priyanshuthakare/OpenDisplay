@@ -238,33 +238,52 @@ private class FrameDecoder(
         start()
     }
     private val bufferInfo = MediaCodec.BufferInfo()
+    private val pacer = FramePacer()
 
     fun matches(frame: ProtocolFrame): Boolean =
         frame.codec == codecType && frame.width == width && frame.height == height
 
     fun queue(frame: ProtocolFrame) {
-        val inIndex = decoder.dequeueInputBuffer(10_000)
-        if (inIndex >= 0) {
-            val inputBuffer = decoder.getInputBuffer(inIndex) ?: return
-            inputBuffer.clear()
-            inputBuffer.put(frame.payload)
-            decoder.queueInputBuffer(
-                inIndex,
-                0,
-                frame.payload.size,
-                frame.timestampNs / 1_000,
-                0,
-            )
+        // Backpressure: if no input buffer is free, drain output (which also
+        // presents ready frames) and retry rather than dropping the payload,
+        // which would corrupt the stream — especially for reference frames.
+        // dequeueInputBuffer's 10 ms timeout paces the retries without spinning.
+        var inIndex = decoder.dequeueInputBuffer(10_000)
+        while (inIndex < 0) {
+            drainOutput()
+            inIndex = decoder.dequeueInputBuffer(10_000)
         }
 
+        val inputBuffer = decoder.getInputBuffer(inIndex) ?: return
+        inputBuffer.clear()
+        inputBuffer.put(frame.payload)
+        decoder.queueInputBuffer(
+            inIndex,
+            0,
+            frame.payload.size,
+            frame.timestampNs / 1_000,
+            0,
+        )
+
+        drainOutput()
+    }
+
+    /**
+     * Release all currently-ready output frames to the surface, scheduling each
+     * for its paced presentation time. Returns true if at least one frame was
+     * released.
+     */
+    private fun drainOutput(): Boolean {
+        var released = false
         while (true) {
             val outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
-            if (outIndex >= 0) {
-                decoder.releaseOutputBuffer(outIndex, true)
-            } else {
-                break
-            }
+            if (outIndex < 0) break
+            val ptsNs = bufferInfo.presentationTimeUs * 1_000
+            val presentNs = pacer.deadlineNs(ptsNs, System.nanoTime())
+            decoder.releaseOutputBuffer(outIndex, presentNs)
+            released = true
         }
+        return released
     }
 
     override fun close() {
