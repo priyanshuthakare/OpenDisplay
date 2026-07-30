@@ -43,6 +43,14 @@ Milestones:
 - Add fragmentation, CRC, double buffering, and reconnect state machines.
 - Detect USB 2 versus USB 3 throughput and adjust bitrate.
 
+Status: ADB-forwarded TCP transport works. `stream-capture` defaults to a live
+"latest-frame-wins" mode: each tick it encodes only the newest captured frame,
+deletes the stale backlog (bounding disk), and timestamps with the real wall
+clock so the client presents with minimal latency instead of accumulating a
+growing lag. `--no-live` restores ordered fixed-fps file replay. Still open:
+native USB bulk endpoints, the disk-free shared-memory handoff, reconnect state
+machine, and USB 2/3 bitrate adaptation.
+
 ## Phase 5: Android Decode and Render
 
 Milestones:

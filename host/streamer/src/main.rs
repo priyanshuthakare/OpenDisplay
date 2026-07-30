@@ -89,6 +89,11 @@ enum Command {
         /// Replay the frame set continuously until interrupted.
         #[arg(long, default_value_t = false)]
         r#loop: bool,
+        /// Live second-monitor mode (default): always stream the newest capture
+        /// and drop the stale backlog for minimal latency. Use --no-live for
+        /// ordered fixed-fps file replay.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        live: bool,
     },
 }
 
@@ -193,6 +198,7 @@ fn main() -> Result<()> {
             serial,
             max_frames,
             r#loop,
+            live,
         } => {
             let codec = match codec.to_ascii_lowercase().as_str() {
                 "h264" | "avc" => EncoderCodec::H264,
@@ -210,6 +216,7 @@ fn main() -> Result<()> {
                 serial,
                 max_frames,
                 loop_forever: r#loop,
+                live,
             })?;
         }
     }

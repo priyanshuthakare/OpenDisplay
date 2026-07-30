@@ -240,11 +240,19 @@ cargo run -p usbdisplay-streamer -- stream-capture `
     --codec h264 --fps 60 --bitrate 20000000 --gop 60 --loop
 ```
 
+By default this runs in **live mode**: for use as a real second monitor it
+always streams the newest captured frame, deletes the stale backlog to bound
+disk usage, and timestamps with the real wall clock so the tablet presents with
+minimal latency rather than falling progressively behind. Pass `--no-live` to
+replay every captured frame in order at a fixed fps (useful for demos or
+inspecting a fixed capture set).
+
 Optional flags:
 
 - `--serial <adb-serial>` to target a specific tablet
 - `--port <tcp-port>` to override `27183`
 - `--max-frames <n>` for quick verification runs
+- `--no-live` for ordered fixed-fps file replay (default is live)
 
 Expected result:
 

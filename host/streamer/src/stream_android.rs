@@ -28,6 +28,12 @@ pub struct StreamCaptureArgs {
     pub serial: Option<String>,
     pub max_frames: Option<usize>,
     pub loop_forever: bool,
+    /// Live mode: always encode the newest captured frame, drop and delete the
+    /// stale backlog, and send immediately with real wall-clock timestamps so
+    /// the client presents with minimal latency. This is what makes the tablet
+    /// usable as a real second monitor. When false, every captured frame is
+    /// replayed in order at a fixed fps (demo / file-replay behavior).
+    pub live: bool,
 }
 
 struct AdbForwardGuard {
@@ -197,6 +203,52 @@ fn connect_with_retry(port: u16) -> Result<TcpStream> {
     bail!("failed to connect to 127.0.0.1:{port}: {last_err:?}")
 }
 
+/// Wraps one coded picture in a protocol `EncodedFrame`, packetizes it, and
+/// writes the length-prefixed transport packets to the socket. Shared by the
+/// live and replay paths so framing stays identical.
+struct FrameSender<'a> {
+    socket: &'a mut TcpStream,
+    packetizer: Packetizer,
+    codec: Codec,
+    width: u16,
+    height: u16,
+    fps: u32,
+    frame_sequence: u64,
+    total_packets: usize,
+    total_frames: usize,
+}
+
+impl FrameSender<'_> {
+    fn send_unit(&mut self, unit: &usbdisplay_encoder::EncodedUnit) -> Result<()> {
+        let flags = if unit.keyframe {
+            FrameFlags::KEYFRAME
+        } else {
+            FrameFlags::NONE
+        };
+        let encoded_frame = EncodedFrame::new(
+            self.frame_sequence,
+            unit.timestamp_ns,
+            self.codec.to_protocol(),
+            flags,
+            self.width,
+            self.height,
+            self.fps * 1000,
+            unit.bytes.clone(),
+        )?;
+        self.frame_sequence = self.frame_sequence.wrapping_add(1).max(1);
+
+        for packet in self.packetizer.packetize_frame(&encoded_frame)? {
+            let bytes = packet.encode();
+            let packet_len = (bytes.len() as u32).to_le_bytes();
+            self.socket.write_all(&packet_len)?;
+            self.socket.write_all(&bytes)?;
+            self.total_packets += 1;
+        }
+        self.total_frames += 1;
+        Ok(())
+    }
+}
+
 pub fn run(args: StreamCaptureArgs) -> Result<()> {
     let mut frames = collect_frames(&args.input_dir)?;
     while args.loop_forever && frames.is_empty() {
@@ -265,129 +317,149 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         }
     };
 
-    let mut frame_sequence = 1u64;
-    let frame_dur_ns = 1_000_000_000u64 / (args.fps.max(1) as u64);
-    let mut source_timestamp_ns = 0u64;
-    let mut packetizer = Packetizer::new(DEFAULT_MAX_PACKET_PAYLOAD);
-    let mut total_packets = 0usize;
-    let mut total_frames = 0usize;
+    let mut sender = FrameSender {
+        socket: &mut socket,
+        packetizer: Packetizer::new(DEFAULT_MAX_PACKET_PAYLOAD),
+        codec: args.codec,
+        width: first.width as u16,
+        height: first.height as u16,
+        fps: args.fps,
+        frame_sequence: 1,
+        total_packets: 0,
+        total_frames: 0,
+    };
     let mut total_input_frames = 0usize;
-    let playback_start = Instant::now();
-    let mut first_pts_ns = None::<u64>;
-    let mut next_frame_index = 0usize;
     let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
 
-    loop {
-        frames = collect_frames(&args.input_dir)?;
-        if frames.len() <= next_frame_index {
-            if args.loop_forever && total_input_frames < max_input_frames {
-                thread::sleep(Duration::from_millis(16));
-                continue;
-            }
-            break;
-        }
-
-        for path in frames.iter().skip(next_frame_index) {
+    if args.live {
+        // Live second-monitor mode: latency beats completeness. Each tick we
+        // take only the NEWEST capture, delete the stale backlog, and time it
+        // with the real wall clock so the client's pacer presents it promptly.
+        let playback_start = Instant::now();
+        let mut last_streamed: Option<PathBuf> = None;
+        loop {
             if total_input_frames >= max_input_frames {
                 break;
             }
-            let frame = read_bgra_bmp(&fs::read(path)?)
-                .with_context(|| format!("decoding {}", path.display()))?;
+            frames = collect_frames(&args.input_dir)?;
+            let newest = match frames.last() {
+                Some(p) => p.clone(),
+                None => {
+                    if args.loop_forever {
+                        thread::sleep(Duration::from_millis(4));
+                        continue;
+                    }
+                    break;
+                }
+            };
+
+            // Nothing new since last tick: wait briefly rather than re-encode
+            // an identical frame.
+            if last_streamed.as_ref() == Some(&newest) {
+                if args.loop_forever {
+                    thread::sleep(Duration::from_millis(4));
+                    continue;
+                }
+                break;
+            }
+
+            // Drop + delete every capture older than the newest so disk stays
+            // bounded and we never fall behind streaming stale frames.
+            for stale in frames.iter().take(frames.len().saturating_sub(1)) {
+                let _ = fs::remove_file(stale);
+            }
+
+            let frame = match read_bgra_bmp(&fs::read(&newest)?) {
+                Ok(f) => f,
+                // A half-written BMP (driver mid-dump) fails to parse; skip and
+                // retry next tick.
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+            };
             if frame.width != first.width || frame.height != first.height {
+                // Resolution changed under us (mode switch). Bail cleanly; the
+                // caller can restart. Encoders here are fixed-size.
                 bail!(
-                    "frame {} size {}x{} differs from first {}x{}",
-                    path.display(),
+                    "capture size changed to {}x{} (was {}x{}); restart stream",
                     frame.width,
                     frame.height,
                     first.width,
                     first.height
                 );
             }
-            let ts = source_timestamp_ns;
-            source_timestamp_ns = source_timestamp_ns.saturating_add(frame_dur_ns);
+
+            let ts = playback_start.elapsed().as_nanos() as u64;
             total_input_frames += 1;
             let units = encoder.encode(&frame, ts)?;
             for unit in units {
-                let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
-                let target_ns = unit.timestamp_ns.saturating_sub(base);
-                let elapsed_ns = playback_start.elapsed().as_nanos() as u64;
-                if target_ns > elapsed_ns {
-                    thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
-                }
-
-                let flags = if unit.keyframe {
-                    FrameFlags::KEYFRAME
-                } else {
-                    FrameFlags::NONE
-                };
-                let encoded_frame = EncodedFrame::new(
-                    frame_sequence,
-                    unit.timestamp_ns,
-                    args.codec.to_protocol(),
-                    flags,
-                    first.width as u16,
-                    first.height as u16,
-                    args.fps * 1000,
-                    unit.bytes,
-                )?;
-                frame_sequence = frame_sequence.wrapping_add(1).max(1);
-
-                let packets = packetizer.packetize_frame(&encoded_frame)?;
-                for packet in packets {
-                    let bytes = packet.encode();
-                    let packet_len = (bytes.len() as u32).to_le_bytes();
-                    socket.write_all(&packet_len)?;
-                    socket.write_all(&bytes)?;
-                    total_packets += 1;
-                }
-                total_frames += 1;
+                sender.send_unit(&unit)?;
             }
-            next_frame_index += 1;
+            last_streamed = Some(newest);
         }
-        if total_input_frames >= max_input_frames {
-            break;
+    } else {
+        // Replay mode: stream every captured frame in order at a fixed fps.
+        let frame_dur_ns = 1_000_000_000u64 / (args.fps.max(1) as u64);
+        let mut source_timestamp_ns = 0u64;
+        let playback_start = Instant::now();
+        let mut first_pts_ns = None::<u64>;
+        let mut next_frame_index = 0usize;
+
+        loop {
+            frames = collect_frames(&args.input_dir)?;
+            if frames.len() <= next_frame_index {
+                if args.loop_forever && total_input_frames < max_input_frames {
+                    thread::sleep(Duration::from_millis(16));
+                    continue;
+                }
+                break;
+            }
+
+            for path in frames.iter().skip(next_frame_index) {
+                if total_input_frames >= max_input_frames {
+                    break;
+                }
+                let frame = read_bgra_bmp(&fs::read(path)?)
+                    .with_context(|| format!("decoding {}", path.display()))?;
+                if frame.width != first.width || frame.height != first.height {
+                    bail!(
+                        "frame {} size {}x{} differs from first {}x{}",
+                        path.display(),
+                        frame.width,
+                        frame.height,
+                        first.width,
+                        first.height
+                    );
+                }
+                let ts = source_timestamp_ns;
+                source_timestamp_ns = source_timestamp_ns.saturating_add(frame_dur_ns);
+                total_input_frames += 1;
+                let units = encoder.encode(&frame, ts)?;
+                for unit in units {
+                    let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
+                    let target_ns = unit.timestamp_ns.saturating_sub(base);
+                    let elapsed_ns = playback_start.elapsed().as_nanos() as u64;
+                    if target_ns > elapsed_ns {
+                        thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
+                    }
+                    sender.send_unit(&unit)?;
+                }
+                next_frame_index += 1;
+            }
+            if total_input_frames >= max_input_frames {
+                break;
+            }
         }
     }
 
-    let drained = encoder.drain()?;
-    for unit in drained {
-        let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
-        let target_ns = unit.timestamp_ns.saturating_sub(base);
-        let elapsed_ns = playback_start.elapsed().as_nanos() as u64;
-        if target_ns > elapsed_ns {
-            thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
-        }
-
-        let flags = if unit.keyframe {
-            FrameFlags::KEYFRAME
-        } else {
-            FrameFlags::NONE
-        };
-        let encoded_frame = EncodedFrame::new(
-            frame_sequence,
-            unit.timestamp_ns,
-            args.codec.to_protocol(),
-            flags,
-            first.width as u16,
-            first.height as u16,
-            args.fps * 1000,
-            unit.bytes,
-        )?;
-        frame_sequence = frame_sequence.wrapping_add(1).max(1);
-        let packets = packetizer.packetize_frame(&encoded_frame)?;
-        for packet in packets {
-            let bytes = packet.encode();
-            let packet_len = (bytes.len() as u32).to_le_bytes();
-            socket.write_all(&packet_len)?;
-            socket.write_all(&bytes)?;
-            total_packets += 1;
-        }
-        total_frames += 1;
+    for unit in encoder.drain()? {
+        sender.send_unit(&unit)?;
     }
 
     println!(
         "streamed_input_frames={} streamed_frames={} streamed_packets={}",
-        total_input_frames, total_frames, total_packets
+        total_input_frames, sender.total_frames, sender.total_packets
     );
 
     // Stop the reverse input channel and drain the thread. Dropping the write
