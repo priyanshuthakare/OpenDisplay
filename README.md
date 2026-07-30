@@ -186,7 +186,11 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 You can also open `android/` in Android Studio and press Run.
 
-The current Android app opens a fullscreen `SurfaceView`. It is ready for the future decoder/rendering pipeline, but it does not receive video frames yet.
+The current Android app opens a fullscreen `SurfaceView` and decodes
+ADB-forwarded USBDisplay stream packets through `MediaCodec`.
+
+The app now includes a local stream listener (`127.0.0.1:27183`) and a
+`MediaCodec` decode/render path for the USBDisplay transport stream.
 
 ### 6. Open the Android Screen
 
@@ -212,6 +216,33 @@ When the driver, streamer, and decoder are implemented, the user flow will be:
 8. Android decodes and renders the stream.
 9. Touch, pen, keyboard, and mouse input travel back to Windows.
 
+### 7a. Stream Captured Frames to Android (ADB USB path)
+
+This repository now provides a concrete USB debug streaming path from host to
+tablet using `adb forward` and the shared transport protocol.
+
+1. Build/install and open the Android app on the tablet.
+2. Ensure `adb devices` shows the tablet as `device`.
+3. Start host streaming:
+
+```powershell
+cargo run -p usbdisplay-streamer -- stream-capture `
+    --input-dir "$env:ProgramData\USBDisplay\capture" `
+    --codec h264 --fps 60 --bitrate 20000000 --gop 60
+```
+
+Optional flags:
+
+- `--serial <adb-serial>` to target a specific tablet
+- `--port <tcp-port>` to override `27183`
+- `--max-frames <n>` for quick verification runs
+
+Expected result:
+
+- Host prints `android_connection=established`.
+- The tablet displays decoded frames from the captured virtual-monitor stream.
+- Transport uses USB (`adb` over cable), not Wi‑Fi.
+
 ### 8. What You Can Do Today
 
 Today, you can:
@@ -225,7 +256,7 @@ Today, you can:
 - Encode those captured frames to a validated H.264 stream on the host
   (`encode-capture`), with structural and decode-round-trip checks.
 - Build and install the Android fullscreen client shell.
-- Compile the Android transport decoder used by the future USB receive path.
+- Run the Android local stream receiver + decoder with ADB-forwarded transport packets.
 - Verify ADB sees the tablet over USB.
 - Use the docs in `docs/` to continue implementing capture, encoder, transport, decoder, and input layers.
 
