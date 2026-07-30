@@ -1,5 +1,6 @@
 mod adb;
 mod encode_capture;
+mod input_inject;
 mod stream_android;
 
 use std::path::PathBuf;

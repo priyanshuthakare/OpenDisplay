@@ -458,6 +458,7 @@ dependencies = [
  "usbdisplay-encoder",
  "usbdisplay-protocol",
  "usbdisplay-transport",
+ "windows",
 ]
 
 [[package]]

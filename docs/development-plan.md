@@ -60,6 +60,17 @@ Milestones:
 - Map stylus pressure, tilt, eraser, and buttons to Windows Ink.
 - Add keyboard, IME, mouse absolute mode, mouse relative mode, and scroll wheel.
 
+Status: the input return channel is implemented as a software slice. Android
+captures touch (including batched historical move samples) and keyboard input,
+normalizes pointer coordinates to `0..65535`, and sends fixed 16-byte tagged
+input events back to the host inside transport `Control` packets. The host reads
+them on a dedicated thread and injects absolute mouse move/click/scroll plus
+keyboard (Unicode text via `KEYEVENTF_UNICODE` and named editing keys via
+virtual-key codes) with Win32 `SendInput`. Still open: stylus pressure/tilt/
+eraser, IME composition, relative mouse mode, and routing input as a dedicated
+HID device bound to the virtual monitor (driver-side). See
+[protocol.md](protocol.md#input-return-channel).
+
 ## Phase 7: Diagnostics and Packaging
 
 Milestones:

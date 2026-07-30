@@ -1,17 +1,22 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use usbdisplay_encoder::{read_bgra_bmp, select_encoder, Codec, EncoderConfig};
-use usbdisplay_protocol::{EncodedFrame, FrameFlags};
-use usbdisplay_transport::{Packetizer, DEFAULT_MAX_PACKET_PAYLOAD};
+use usbdisplay_protocol::{EncodedFrame, FrameFlags, InputEvent};
+use usbdisplay_transport::{
+    Packetizer, ReceivedPacket, TransportPacket, DEFAULT_MAX_PACKET_PAYLOAD,
+};
 
 use crate::adb::{self, AdbDeviceState};
+use crate::input_inject;
 
 pub struct StreamCaptureArgs {
     pub input_dir: PathBuf,
@@ -104,6 +109,80 @@ fn ensure_adb_forward(serial: &str, port: u16) -> Result<AdbForwardGuard> {
     })
 }
 
+/// Reads length-prefixed transport packets from the device and injects any
+/// `Control` input events into the host. Runs until the socket closes or
+/// `running` is cleared. Errors are terminal for the reader only; the video
+/// path keeps streaming.
+fn run_input_reader(mut socket: TcpStream, running: Arc<AtomicBool>, injected: Arc<AtomicU64>) {
+    let mut sink = input_inject::default_sink();
+    // A short read timeout lets the loop notice `running` being cleared even
+    // when the device is idle and no bytes are arriving.
+    let _ = socket.set_read_timeout(Some(Duration::from_millis(200)));
+    while running.load(Ordering::Relaxed) {
+        let mut len_bytes = [0u8; 4];
+        match read_exact_timeout_aware(&mut socket, &mut len_bytes) {
+            ReadOutcome::Ok => {}
+            ReadOutcome::TimedOut => continue,
+            ReadOutcome::Closed => break,
+        }
+        let packet_len = u32::from_le_bytes(len_bytes) as usize;
+        if packet_len == 0 || packet_len > DEFAULT_MAX_PACKET_PAYLOAD + 64 {
+            break; // framing lost; do not try to resync a corrupt reverse channel.
+        }
+        let mut packet_bytes = vec![0u8; packet_len];
+        match read_exact_timeout_aware(&mut socket, &mut packet_bytes) {
+            ReadOutcome::Ok => {}
+            // A partial packet body means we cannot trust the stream position.
+            ReadOutcome::TimedOut | ReadOutcome::Closed => break,
+        }
+        let packet = match TransportPacket::decode(&packet_bytes, DEFAULT_MAX_PACKET_PAYLOAD) {
+            Ok(packet) => packet,
+            Err(_) => continue, // drop malformed packet, keep listening.
+        };
+        let control = match packet.into_received() {
+            Ok(ReceivedPacket::Control(payload)) => payload,
+            _ => continue, // only Control packets carry input today.
+        };
+        for chunk in control.chunks_exact(usbdisplay_protocol::INPUT_EVENT_LEN) {
+            if let Ok(event) = InputEvent::decode(chunk) {
+                sink.inject(&event);
+                injected.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    running.store(false, Ordering::Relaxed);
+}
+
+enum ReadOutcome {
+    Ok,
+    TimedOut,
+    Closed,
+}
+
+/// `read_exact` that reports a read timeout distinctly from a real close, so
+/// the caller can re-check its run flag while idle.
+fn read_exact_timeout_aware(socket: &mut TcpStream, buf: &mut [u8]) -> ReadOutcome {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match socket.read(&mut buf[filled..]) {
+            Ok(0) => return ReadOutcome::Closed,
+            Ok(n) => filled += n,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                // Only surface a timeout at a packet boundary; a mid-packet
+                // stall should keep waiting for the rest of the bytes.
+                if filled == 0 {
+                    return ReadOutcome::TimedOut;
+                }
+            }
+            Err(_) => return ReadOutcome::Closed,
+        }
+    }
+    ReadOutcome::Ok
+}
+
 fn connect_with_retry(port: u16) -> Result<TcpStream> {
     let mut last_err = None;
     for _ in 0..100 {
@@ -166,6 +245,25 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         .set_nodelay(true)
         .context("failed to set TCP_NODELAY")?;
     println!("android_connection=established");
+
+    // Spawn the reverse input channel on a clone of the socket. The video path
+    // below keeps ownership of `socket` for writes.
+    let input_running = Arc::new(AtomicBool::new(true));
+    let input_injected = Arc::new(AtomicU64::new(0));
+    let input_reader = match socket.try_clone() {
+        Ok(reader_socket) => {
+            let running = Arc::clone(&input_running);
+            let injected = Arc::clone(&input_injected);
+            println!("input_return_channel=enabled");
+            Some(thread::spawn(move || {
+                run_input_reader(reader_socket, running, injected)
+            }))
+        }
+        Err(err) => {
+            println!("input_return_channel=disabled reason=\"clone failed: {err}\"");
+            None
+        }
+    };
 
     let mut frame_sequence = 1u64;
     let frame_dur_ns = 1_000_000_000u64 / (args.fps.max(1) as u64);
@@ -290,6 +388,18 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     println!(
         "streamed_input_frames={} streamed_frames={} streamed_packets={}",
         total_input_frames, total_frames, total_packets
+    );
+
+    // Stop the reverse input channel and drain the thread. Dropping the write
+    // half and clearing the flag unblocks the reader's blocking read.
+    input_running.store(false, Ordering::Relaxed);
+    drop(socket);
+    if let Some(handle) = input_reader {
+        let _ = handle.join();
+    }
+    println!(
+        "input_events_injected={}",
+        input_injected.load(Ordering::Relaxed)
     );
     println!("stream_complete=true");
     Ok(())
