@@ -73,21 +73,23 @@ protocol shape.
 
 ## Status
 
-USBDisplay is not yet a usable second-monitor application. The repository
-currently contains the project structure, protocol implementation, a working
-Windows Indirect Display Driver that enumerates a virtual monitor, host CLI
-skeleton, Android client skeleton, and documentation needed to build the full
-system.
+USBDisplay now supports an end-to-end USB debug path that can present the
+Windows virtual monitor on an Android tablet over `adb forward`.
 
-The Windows Indirect Display Driver now enumerates a virtual monitor and
-captures its actual composed contents, and the host encodes those captured
-frames to a validated H.264 stream. The Android screen will not show the
-Windows desktop until these remaining pieces are implemented:
+Current implementation:
 
-- Live shared-memory frame boundary from the driver to the encoder (the encoder
-  currently reads the on-disk capture frames)
-- USB or ADB transport session
-- Android `MediaCodec` decoder
+- The Windows IDD enumerates a virtual `USBDisplay` monitor and captures its
+  composed frames to `%ProgramData%\USBDisplay\capture`.
+- The host `stream-capture` command continuously encodes newly captured frames
+  and streams them over ADB-forwarded USB transport.
+- The Android app listens on `127.0.0.1:27183`, decodes the protocol frames
+  with `MediaCodec`, and renders to fullscreen surface output.
+
+Known limitations:
+
+- The host/driver handoff is still disk-backed (no shared-memory boundary yet),
+  so latency and disk I/O are higher than the planned production design.
+- Android touch/pen/keyboard/mouse return input is not implemented yet.
 
 ## Step-by-Step Guide
 
@@ -186,7 +188,11 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 You can also open `android/` in Android Studio and press Run.
 
-The current Android app opens a fullscreen `SurfaceView`. It is ready for the future decoder/rendering pipeline, but it does not receive video frames yet.
+The current Android app opens a fullscreen `SurfaceView` and decodes
+ADB-forwarded USBDisplay stream packets through `MediaCodec`.
+
+The app now includes a local stream listener (`127.0.0.1:27183`) and a
+`MediaCodec` decode/render path for the USBDisplay transport stream.
 
 ### 6. Open the Android Screen
 
@@ -212,6 +218,33 @@ When the driver, streamer, and decoder are implemented, the user flow will be:
 8. Android decodes and renders the stream.
 9. Touch, pen, keyboard, and mouse input travel back to Windows.
 
+### 7a. Stream Captured Frames to Android (ADB USB path)
+
+This repository now provides a concrete USB debug streaming path from host to
+tablet using `adb forward` and the shared transport protocol.
+
+1. Build/install and open the Android app on the tablet.
+2. Ensure `adb devices` shows the tablet as `device`.
+3. Start host streaming:
+
+```powershell
+cargo run -p usbdisplay-streamer -- stream-capture `
+    --input-dir "$env:ProgramData\USBDisplay\capture" `
+    --codec h264 --fps 60 --bitrate 20000000 --gop 60 --loop
+```
+
+Optional flags:
+
+- `--serial <adb-serial>` to target a specific tablet
+- `--port <tcp-port>` to override `27183`
+- `--max-frames <n>` for quick verification runs
+
+Expected result:
+
+- Host prints `android_connection=established`.
+- The tablet displays decoded frames from the captured virtual-monitor stream.
+- Transport uses USB (`adb` over cable), not Wi‑Fi.
+
 ### 8. What You Can Do Today
 
 Today, you can:
@@ -225,16 +258,14 @@ Today, you can:
 - Encode those captured frames to a validated H.264 stream on the host
   (`encode-capture`), with structural and decode-round-trip checks.
 - Build and install the Android fullscreen client shell.
-- Compile the Android transport decoder used by the future USB receive path.
+- Run the Android local stream receiver + decoder with ADB-forwarded transport packets.
 - Verify ADB sees the tablet over USB.
-- Use the docs in `docs/` to continue implementing capture, encoder, transport, decoder, and input layers.
+- Use the tablet as a USB-connected secondary display in the current disk-backed pipeline.
+- Use the docs in `docs/` to continue improving capture, transport, decode, and input layers.
 
 You cannot yet:
 
-- Extend the Windows desktop to Android.
-- Duplicate the Windows desktop to Android.
 - Use touch or stylus as Windows input.
-- Stream real frames from Windows to Android.
 
 ## Non-Goals
 

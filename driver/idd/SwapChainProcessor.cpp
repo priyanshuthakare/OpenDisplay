@@ -8,6 +8,13 @@ using Microsoft::WRL::ComPtr;
 
 namespace UsbDisplay
 {
+    namespace
+    {
+        // For real second-monitor behavior the host needs fresh monitor content on
+        // every composition update, so dump each acquired frame.
+        constexpr UINT64 kCaptureEveryNFrames = 1;
+    }
+
     Direct3DDevice::Direct3DDevice(LUID adapterLuid) : AdapterLuid(adapterLuid)
     {
     }
@@ -190,7 +197,7 @@ namespace UsbDisplay
                 // The full-frame GPU->CPU readback is heavy, so validate on the dump
                 // cadence rather than every frame; the encoder milestone consumes the
                 // surface on the GPU (no CPU stall) every frame instead.
-                if (m_capturer && surface && (frameCount % 120) == 0)
+                if (m_capturer && surface && (frameCount % kCaptureEveryNFrames) == 0)
                 {
                     ComPtr<ID3D11Texture2D> srcTex;
                     if (SUCCEEDED(surface.As(&srcTex)) && m_capturer->Capture(srcTex.Get()))

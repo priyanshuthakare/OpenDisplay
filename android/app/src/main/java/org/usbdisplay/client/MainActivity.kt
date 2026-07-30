@@ -12,6 +12,7 @@ import android.view.WindowManager
 
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
+    private var streamSession: StreamSession? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,12 +42,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        // Decoder startup is intentionally tied to surface availability.
+        streamSession?.stop()
+        streamSession = StreamSession(holder.surface).also { it.start() }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        streamSession?.stop()
+        streamSession = null
+    }
+
+    override fun onDestroy() {
+        streamSession?.stop()
+        streamSession = null
+        super.onDestroy()
     }
 }

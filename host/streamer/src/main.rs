@@ -1,5 +1,6 @@
 mod adb;
 mod encode_capture;
+mod stream_android;
 
 use std::path::PathBuf;
 
@@ -60,6 +61,33 @@ enum Command {
         /// After encoding, decode the stream back to prove it is decodable.
         #[arg(long, default_value_t = false)]
         verify_decode: bool,
+    },
+    /// Encode captured frames and stream them to Android over ADB-forwarded TCP.
+    StreamCapture {
+        /// Directory of capture_*.bmp frames (default: %ProgramData%\\USBDisplay\\capture).
+        #[arg(long)]
+        input_dir: Option<PathBuf>,
+        /// Codec: h264 or h265.
+        #[arg(long, default_value = "h264")]
+        codec: String,
+        #[arg(long, default_value_t = 20_000_000)]
+        bitrate: u32,
+        #[arg(long, default_value_t = 60)]
+        fps: u32,
+        #[arg(long, default_value_t = 60)]
+        gop: u32,
+        /// TCP port used by adb forward + Android listener.
+        #[arg(long, default_value_t = 27183)]
+        port: u16,
+        /// Optional adb serial. If omitted, the first connected device is used.
+        #[arg(long)]
+        serial: Option<String>,
+        /// Cap the number of frames streamed.
+        #[arg(long)]
+        max_frames: Option<usize>,
+        /// Replay the frame set continuously until interrupted.
+        #[arg(long, default_value_t = false)]
+        r#loop: bool,
     },
 }
 
@@ -152,6 +180,35 @@ fn main() -> Result<()> {
                 gop,
                 max_frames,
                 verify_decode,
+            })?;
+        }
+        Command::StreamCapture {
+            input_dir,
+            codec,
+            bitrate,
+            fps,
+            gop,
+            port,
+            serial,
+            max_frames,
+            r#loop,
+        } => {
+            let codec = match codec.to_ascii_lowercase().as_str() {
+                "h264" | "avc" => EncoderCodec::H264,
+                "h265" | "hevc" => EncoderCodec::H265,
+                other => anyhow::bail!("unknown codec '{other}' (use h264 or h265)"),
+            };
+            let input_dir = input_dir.unwrap_or_else(default_capture_dir);
+            stream_android::run(stream_android::StreamCaptureArgs {
+                input_dir,
+                codec,
+                bitrate_bps: bitrate,
+                fps,
+                gop,
+                port,
+                serial,
+                max_frames,
+                loop_forever: r#loop,
             })?;
         }
     }
