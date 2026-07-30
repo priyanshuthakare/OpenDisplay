@@ -1,7 +1,11 @@
 mod adb;
+mod encode_capture;
+
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use usbdisplay_encoder::Codec as EncoderCodec;
 use usbdisplay_protocol::{Codec, EncodedFrame, FrameFlags};
 use usbdisplay_transport::{Packetizer, DEFAULT_MAX_PACKET_PAYLOAD};
 
@@ -32,6 +36,30 @@ enum Command {
     TransportProbe {
         #[arg(long, default_value_t = DEFAULT_MAX_PACKET_PAYLOAD)]
         max_packet_payload: usize,
+    },
+    /// Encode the driver's captured frames with a hardware encoder and validate.
+    EncodeCapture {
+        /// Directory of capture_*.bmp frames (default: %ProgramData%\USBDisplay\capture).
+        #[arg(long)]
+        input_dir: Option<PathBuf>,
+        /// Output elementary-stream path.
+        #[arg(long, default_value = "capture.h264")]
+        out: PathBuf,
+        /// Codec: h264 or h265.
+        #[arg(long, default_value = "h264")]
+        codec: String,
+        #[arg(long, default_value_t = 20_000_000)]
+        bitrate: u32,
+        #[arg(long, default_value_t = 60)]
+        fps: u32,
+        #[arg(long, default_value_t = 60)]
+        gop: u32,
+        /// Cap the number of frames encoded (for quick checks).
+        #[arg(long)]
+        max_frames: Option<usize>,
+        /// After encoding, decode the stream back to prove it is decodable.
+        #[arg(long, default_value_t = false)]
+        verify_decode: bool,
     },
 }
 
@@ -99,7 +127,43 @@ fn main() -> Result<()> {
             println!("transport_bytes={total_bytes}");
             println!("max_packet_payload={max_packet_payload}");
         }
+        Command::EncodeCapture {
+            input_dir,
+            out,
+            codec,
+            bitrate,
+            fps,
+            gop,
+            max_frames,
+            verify_decode,
+        } => {
+            let codec = match codec.to_ascii_lowercase().as_str() {
+                "h264" | "avc" => EncoderCodec::H264,
+                "h265" | "hevc" => EncoderCodec::H265,
+                other => anyhow::bail!("unknown codec '{other}' (use h264 or h265)"),
+            };
+            let input_dir = input_dir.unwrap_or_else(default_capture_dir);
+            encode_capture::run(encode_capture::EncodeCaptureArgs {
+                input_dir,
+                out,
+                codec,
+                bitrate_bps: bitrate,
+                fps,
+                gop,
+                max_frames,
+                verify_decode,
+            })?;
+        }
     }
 
     Ok(())
+}
+
+/// %ProgramData%\USBDisplay\capture, matching the driver's dump location.
+fn default_capture_dir() -> std::path::PathBuf {
+    let base = std::env::var("ProgramData")
+        .unwrap_or_else(|_| "C:\\ProgramData".to_string());
+    std::path::PathBuf::from(base)
+        .join("USBDisplay")
+        .join("capture")
 }

@@ -29,7 +29,7 @@ scripts/               Build and packaging scripts
 
 ## Current Implementation Slice
 
-Two slices are implemented today.
+Three slices are implemented today.
 
 **Shared USB stream protocol:**
 
@@ -52,9 +52,24 @@ See [docs/idd-driver.md](docs/idd-driver.md) for the driver architecture, the
 frame loop, the capture readback, and the debugging journey behind the current
 build.
 
-The hardware encoder, USB transport, Android decoder, and HID paths are
-documented with contracts and milestones so each subsystem can be implemented
-without changing the protocol shape.
+**Hardware encoder (host):**
+
+- Reads the driver's captured `capture_*.bmp` frames and encodes them to an
+  Annex-B H.264 elementary stream with a hardware Media Foundation encoder
+- Backend selection chain (NVENC → Quick Sync → AMF → Media Foundation); Media
+  Foundation is implemented, the vendor backends are honest stubs behind the
+  same trait
+- Each coded picture flows through the protocol `EncodedFrame` and transport
+  `Packetizer`, proving the encode → frame → transport path
+- Deterministic on-device validation: structural NAL check (SPS/PPS/IDR present)
+  and a decode round-trip through the Media Foundation decoder MFT
+
+See [docs/encoder.md](docs/encoder.md) for the backend chain, the pipeline, the
+`encode-capture` command, and the validation strategy.
+
+The USB transport, Android decoder, and HID paths are documented with contracts
+and milestones so each subsystem can be implemented without changing the
+protocol shape.
 
 ## Status
 
@@ -65,10 +80,12 @@ skeleton, Android client skeleton, and documentation needed to build the full
 system.
 
 The Windows Indirect Display Driver now enumerates a virtual monitor and
-captures its actual composed contents. The Android screen will not show the
+captures its actual composed contents, and the host encodes those captured
+frames to a validated H.264 stream. The Android screen will not show the
 Windows desktop until these remaining pieces are implemented:
 
-- Hardware encoder (consuming the captured surface)
+- Live shared-memory frame boundary from the driver to the encoder (the encoder
+  currently reads the on-disk capture frames)
 - USB or ADB transport session
 - Android `MediaCodec` decoder
 
@@ -117,6 +134,28 @@ Expected result:
 - `transport-probe` packetizes a synthetic frame using the reliable transport layer.
 
 This does not stream the desktop yet. It only proves the host CLI and protocol layer are working.
+
+### 3a. Encode Captured Frames (optional)
+
+If the IDD driver has written frames to `%ProgramData%\USBDisplay\capture`, you
+can encode them to a validated H.264 stream on the host:
+
+```powershell
+cargo run -p usbdisplay-streamer -- encode-capture `
+    --input-dir "$env:ProgramData\USBDisplay\capture" `
+    --out capture.h264 --codec h264 --fps 60 --bitrate 20000000 --gop 60 `
+    --verify-decode
+```
+
+Expected result:
+
+- The best available encoder backend is selected (Media Foundation today).
+- The captured BMP frames encode to an Annex-B H.264 elementary stream.
+- The stream passes the structural NAL check (`stream_playable=true`) and the
+  decode round-trip (`decode_roundtrip=PASS`).
+
+This proves the encode → protocol → transport path on real captured frames. It
+does not yet send them to Android. See [docs/encoder.md](docs/encoder.md).
 
 ### 4. Verify the Android Device Is Connected
 
@@ -183,6 +222,8 @@ Today, you can:
   monitor enumerate in Windows Display Settings (Extend or Duplicate).
 - Verify the driver captures the virtual monitor via the frames it writes to
   `%ProgramData%\USBDisplay\capture`.
+- Encode those captured frames to a validated H.264 stream on the host
+  (`encode-capture`), with structural and decode-round-trip checks.
 - Build and install the Android fullscreen client shell.
 - Compile the Android transport decoder used by the future USB receive path.
 - Verify ADB sees the tablet over USB.

@@ -28,6 +28,12 @@ Milestones:
 - Add H.265 baseline stream.
 - Add bitrate, GOP, resolution, and scene-change controls.
 
+Status: the backend selection chain (NVENC -> QuickSync -> AMF -> Media
+Foundation) and the Media Foundation H.264 encoder are implemented. Captured
+frames encode to H.264 and pass structural + decode-round-trip validation. The
+vendor backends are stubs, and H.265 / rate-control tuning are still open. See
+[encoder.md](encoder.md).
+
 ## Phase 4: USB Transport
 
 Milestones:
