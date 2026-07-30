@@ -44,15 +44,43 @@ internal class StreamSession(
     }
 
     private fun runLoop() {
-        var decoder: FrameDecoder? = null
         try {
             serverSocket = ServerSocket(STREAM_PORT, 1, InetAddress.getByName("127.0.0.1"))
             Log.i(TAG, "Listening on 127.0.0.1:$STREAM_PORT for adb-forwarded host stream")
-            clientSocket = serverSocket!!.accept()
-            Log.i(TAG, "Host connected, starting decode")
+            while (running.get()) {
+                val accepted = try {
+                    serverSocket!!.accept()
+                } catch (e: Exception) {
+                    if (!running.get()) break
+                    throw e
+                }
+                clientSocket = accepted
+                try {
+                    Log.i(TAG, "Host connected, starting decode")
+                    handleClient(accepted)
+                    Log.i(TAG, "Host disconnected")
+                } finally {
+                    accepted.close()
+                    clientSocket = null
+                }
+            }
+        } catch (e: EOFException) {
+            Log.i(TAG, "Host stream ended")
+        } catch (e: Exception) {
+            if (running.get()) {
+                Log.e(TAG, "Stream session failed", e)
+            }
+        } finally {
+            clientSocket?.close()
+            serverSocket?.close()
+        }
+    }
 
-            val reassembler = FrameReassembler()
-            val input = BufferedInputStream(clientSocket!!.getInputStream())
+    private fun handleClient(socket: Socket) {
+        var decoder: FrameDecoder? = null
+        val reassembler = FrameReassembler()
+        val input = BufferedInputStream(socket.getInputStream())
+        try {
             while (running.get()) {
                 val packetLength = readU32LE(input)
                 val packetBytes = readExactly(input, packetLength)
@@ -85,16 +113,8 @@ internal class StreamSession(
                 }
                 decoder.queue(frame)
             }
-        } catch (e: EOFException) {
-            Log.i(TAG, "Host stream ended")
-        } catch (e: Exception) {
-            if (running.get()) {
-                Log.e(TAG, "Stream session failed", e)
-            }
         } finally {
             decoder?.close()
-            clientSocket?.close()
-            serverSocket?.close()
         }
     }
 }

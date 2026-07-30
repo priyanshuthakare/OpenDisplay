@@ -73,21 +73,23 @@ protocol shape.
 
 ## Status
 
-USBDisplay is not yet a usable second-monitor application. The repository
-currently contains the project structure, protocol implementation, a working
-Windows Indirect Display Driver that enumerates a virtual monitor, host CLI
-skeleton, Android client skeleton, and documentation needed to build the full
-system.
+USBDisplay now supports an end-to-end USB debug path that can present the
+Windows virtual monitor on an Android tablet over `adb forward`.
 
-The Windows Indirect Display Driver now enumerates a virtual monitor and
-captures its actual composed contents, and the host encodes those captured
-frames to a validated H.264 stream. The Android screen will not show the
-Windows desktop until these remaining pieces are implemented:
+Current implementation:
 
-- Live shared-memory frame boundary from the driver to the encoder (the encoder
-  currently reads the on-disk capture frames)
-- USB or ADB transport session
-- Android `MediaCodec` decoder
+- The Windows IDD enumerates a virtual `USBDisplay` monitor and captures its
+  composed frames to `%ProgramData%\USBDisplay\capture`.
+- The host `stream-capture` command continuously encodes newly captured frames
+  and streams them over ADB-forwarded USB transport.
+- The Android app listens on `127.0.0.1:27183`, decodes the protocol frames
+  with `MediaCodec`, and renders to fullscreen surface output.
+
+Known limitations:
+
+- The host/driver handoff is still disk-backed (no shared-memory boundary yet),
+  so latency and disk I/O are higher than the planned production design.
+- Android touch/pen/keyboard/mouse return input is not implemented yet.
 
 ## Step-by-Step Guide
 
@@ -228,7 +230,7 @@ tablet using `adb forward` and the shared transport protocol.
 ```powershell
 cargo run -p usbdisplay-streamer -- stream-capture `
     --input-dir "$env:ProgramData\USBDisplay\capture" `
-    --codec h264 --fps 60 --bitrate 20000000 --gop 60
+    --codec h264 --fps 60 --bitrate 20000000 --gop 60 --loop
 ```
 
 Optional flags:
@@ -258,14 +260,12 @@ Today, you can:
 - Build and install the Android fullscreen client shell.
 - Run the Android local stream receiver + decoder with ADB-forwarded transport packets.
 - Verify ADB sees the tablet over USB.
-- Use the docs in `docs/` to continue implementing capture, encoder, transport, decoder, and input layers.
+- Use the tablet as a USB-connected secondary display in the current disk-backed pipeline.
+- Use the docs in `docs/` to continue improving capture, transport, decode, and input layers.
 
 You cannot yet:
 
-- Extend the Windows desktop to Android.
-- Duplicate the Windows desktop to Android.
 - Use touch or stylus as Windows input.
-- Stream real frames from Windows to Android.
 
 ## Non-Goals
 

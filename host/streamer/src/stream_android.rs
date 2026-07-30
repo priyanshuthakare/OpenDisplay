@@ -119,15 +119,18 @@ fn connect_with_retry(port: u16) -> Result<TcpStream> {
 }
 
 pub fn run(args: StreamCaptureArgs) -> Result<()> {
-    let frames = collect_frames(&args.input_dir)?;
+    let mut frames = collect_frames(&args.input_dir)?;
+    while args.loop_forever && frames.is_empty() {
+        println!("waiting_for_capture_frames=true");
+        thread::sleep(Duration::from_millis(250));
+        frames = collect_frames(&args.input_dir)?;
+    }
     if frames.is_empty() {
         bail!(
             "no capture_*.bmp frames found in {}",
             args.input_dir.display()
         );
     }
-    let take = args.max_frames.unwrap_or(frames.len()).min(frames.len());
-    println!("stream_input_frames={take}");
 
     let first = read_bgra_bmp(&fs::read(&frames[0])?)
         .with_context(|| format!("decoding {}", frames[0].display()))?;
@@ -165,16 +168,31 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     println!("android_connection=established");
 
     let mut frame_sequence = 1u64;
-    let mut timestamp_offset_ns = 0u64;
     let frame_dur_ns = 1_000_000_000u64 / (args.fps.max(1) as u64);
+    let mut source_timestamp_ns = 0u64;
     let mut packetizer = Packetizer::new(DEFAULT_MAX_PACKET_PAYLOAD);
     let mut total_packets = 0usize;
     let mut total_frames = 0usize;
+    let mut total_input_frames = 0usize;
     let playback_start = Instant::now();
     let mut first_pts_ns = None::<u64>;
+    let mut next_frame_index = 0usize;
+    let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
 
     loop {
-        for (i, path) in frames.iter().take(take).enumerate() {
+        frames = collect_frames(&args.input_dir)?;
+        if frames.len() <= next_frame_index {
+            if args.loop_forever && total_input_frames < max_input_frames {
+                thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            break;
+        }
+
+        for path in frames.iter().skip(next_frame_index) {
+            if total_input_frames >= max_input_frames {
+                break;
+            }
             let frame = read_bgra_bmp(&fs::read(path)?)
                 .with_context(|| format!("decoding {}", path.display()))?;
             if frame.width != first.width || frame.height != first.height {
@@ -187,7 +205,9 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                     first.height
                 );
             }
-            let ts = timestamp_offset_ns + (i as u64) * frame_dur_ns;
+            let ts = source_timestamp_ns;
+            source_timestamp_ns = source_timestamp_ns.saturating_add(frame_dur_ns);
+            total_input_frames += 1;
             let units = encoder.encode(&frame, ts)?;
             for unit in units {
                 let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
@@ -224,52 +244,53 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                 }
                 total_frames += 1;
             }
+            next_frame_index += 1;
         }
-
-        let drained = encoder.drain()?;
-        for unit in drained {
-            let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
-            let target_ns = unit.timestamp_ns.saturating_sub(base);
-            let elapsed_ns = playback_start.elapsed().as_nanos() as u64;
-            if target_ns > elapsed_ns {
-                thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
-            }
-
-            let flags = if unit.keyframe {
-                FrameFlags::KEYFRAME
-            } else {
-                FrameFlags::NONE
-            };
-            let encoded_frame = EncodedFrame::new(
-                frame_sequence,
-                unit.timestamp_ns,
-                args.codec.to_protocol(),
-                flags,
-                first.width as u16,
-                first.height as u16,
-                args.fps * 1000,
-                unit.bytes,
-            )?;
-            frame_sequence = frame_sequence.wrapping_add(1).max(1);
-            let packets = packetizer.packetize_frame(&encoded_frame)?;
-            for packet in packets {
-                let bytes = packet.encode();
-                let packet_len = (bytes.len() as u32).to_le_bytes();
-                socket.write_all(&packet_len)?;
-                socket.write_all(&bytes)?;
-                total_packets += 1;
-            }
-            total_frames += 1;
-        }
-
-        println!("streamed_frames={total_frames} streamed_packets={total_packets}");
-        timestamp_offset_ns = timestamp_offset_ns
-            .saturating_add((take as u64).saturating_mul(frame_dur_ns));
-        if !args.loop_forever {
+        if total_input_frames >= max_input_frames {
             break;
         }
     }
 
+    let drained = encoder.drain()?;
+    for unit in drained {
+        let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
+        let target_ns = unit.timestamp_ns.saturating_sub(base);
+        let elapsed_ns = playback_start.elapsed().as_nanos() as u64;
+        if target_ns > elapsed_ns {
+            thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
+        }
+
+        let flags = if unit.keyframe {
+            FrameFlags::KEYFRAME
+        } else {
+            FrameFlags::NONE
+        };
+        let encoded_frame = EncodedFrame::new(
+            frame_sequence,
+            unit.timestamp_ns,
+            args.codec.to_protocol(),
+            flags,
+            first.width as u16,
+            first.height as u16,
+            args.fps * 1000,
+            unit.bytes,
+        )?;
+        frame_sequence = frame_sequence.wrapping_add(1).max(1);
+        let packets = packetizer.packetize_frame(&encoded_frame)?;
+        for packet in packets {
+            let bytes = packet.encode();
+            let packet_len = (bytes.len() as u32).to_le_bytes();
+            socket.write_all(&packet_len)?;
+            socket.write_all(&bytes)?;
+            total_packets += 1;
+        }
+        total_frames += 1;
+    }
+
+    println!(
+        "streamed_input_frames={} streamed_frames={} streamed_packets={}",
+        total_input_frames, total_frames, total_packets
+    );
     println!("stream_complete=true");
     Ok(())
 }
