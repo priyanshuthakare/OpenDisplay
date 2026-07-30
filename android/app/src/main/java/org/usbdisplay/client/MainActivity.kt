@@ -25,11 +25,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        hideSystemBars()
 
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
         setContentView(surfaceView)
+        hideSystemBars()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
