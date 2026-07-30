@@ -1,5 +1,8 @@
 # USBDisplay
 
+[![Rust](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/rust.yml/badge.svg)](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/rust.yml)
+[![Android](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/android.yml/badge.svg)](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/android.yml)
+
 USBDisplay is an open-source Windows-to-Android secondary display stack designed for USB-only operation.
 
 The target experience is the same mental model as plugging in a physical HDMI monitor:
@@ -89,7 +92,11 @@ Known limitations:
 
 - The host/driver handoff is still disk-backed (no shared-memory boundary yet),
   so latency and disk I/O are higher than the planned production design.
-- Android touch/pen/keyboard/mouse return input is not implemented yet.
+- Android touch and mouse return to the host as absolute cursor input via
+  `SendInput`, and physical/soft keyboard keys return as Unicode text plus named
+  editing keys (Enter, Backspace, Tab, Escape, Delete, arrows, Home, End). Pen
+  pressure/tilt is not implemented yet, and input is not yet routed as a
+  dedicated HID device on the virtual monitor.
 
 ## Step-by-Step Guide
 
@@ -261,11 +268,29 @@ Today, you can:
 - Run the Android local stream receiver + decoder with ADB-forwarded transport packets.
 - Verify ADB sees the tablet over USB.
 - Use the tablet as a USB-connected secondary display in the current disk-backed pipeline.
+- Touch and drag on the tablet to move and click the Windows cursor, and type
+  on the tablet keyboard to send text and editing keys to the focused Windows
+  window: input returns to the host over the same USB connection and is injected
+  with `SendInput`.
 - Use the docs in `docs/` to continue improving capture, transport, decode, and input layers.
 
 You cannot yet:
 
-- Use touch or stylus as Windows input.
+- Use stylus pressure/tilt as Windows input.
+- Route input as a dedicated HID device bound to the virtual monitor.
+
+## Continuous Integration
+
+GitHub Actions runs on every push and pull request:
+
+- **Rust** (`.github/workflows/rust.yml`): builds and tests the whole workspace
+  on both `ubuntu-latest` and `windows-latest`. Linux exercises the portable
+  `cfg(not(windows))` fallbacks; Windows exercises the real Media Foundation
+  encoder and the `SendInput` input path. A separate non-blocking lint job runs
+  `cargo fmt --check` and `cargo clippy` — these currently surface pre-existing
+  formatting and clippy debt and are intentionally not a merge gate yet.
+- **Android** (`.github/workflows/android.yml`): runs `testDebugUnitTest` and
+  `assembleDebug` on JDK 17, and uploads the debug APK as a build artifact.
 
 ## Non-Goals
 
