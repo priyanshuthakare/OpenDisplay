@@ -97,20 +97,12 @@ installed, WUDFRd reflector, ROOT device, driver loaded with problem code 0,
 adapter count, display count, and the `USBDisplay` monitor with decoded EDID),
 and decodes common CM problem codes (28/31/37/39/41) when a gate fails.
 
-## Verify Capture
+## Verify Frame Processing
 
-Once the monitor is enumerated, the swap-chain worker reads back the acquired
-monitor surface and dumps a captured frame every 120 frames:
+Once the monitor is enumerated, verify the driver remains stable while Windows
+updates the virtual monitor in Extend or Duplicate mode.
 
-```powershell
-Get-ChildItem "$env:ProgramData\USBDisplay\capture" | Select Name,Length,LastWriteTime
-```
-
-Expect `capture_000000.bmp`, `capture_000120.bmp`, … growing over time. Open the
-newest in an image viewer to see the actual contents of the USBDisplay virtual
-monitor (extend a window onto it first, or it may show blank wallpaper).
-Consecutive dumps differ, which proves live capture. This is the deterministic
-validation of real monitor capture before an encoder is added. See
+The production driver does not persist captured frame data to disk. See
 [../../docs/idd-driver.md](../../docs/idd-driver.md) for the full architecture.
 
 > When validating a rebuilt driver, bump `DriverVer` in `Driver.inf` (or run

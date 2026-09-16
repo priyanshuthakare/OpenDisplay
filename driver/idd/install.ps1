@@ -26,22 +26,7 @@ try {
     Write-Host "Could not enable DriverFrameworks-UserMode/Operational log: $($_.Exception.Message)"
 }
 
-# Create the capture output directory with a permissive ACL so the LocalService
-# WUDFHost process can write BMPs there. The driver reads back the virtual
-# monitor surface and writes captured frames to %ProgramData%\USBDisplay\capture
-# as deterministic proof of real capture.
-try {
-    $captureDir = Join-Path $env:ProgramData "USBDisplay\capture"
-    New-Item -ItemType Directory -Force -Path $captureDir | Out-Null
-    $acl = Get-Acl $captureDir
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        "Everyone", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
-    $acl.AddAccessRule($rule)
-    Set-Acl -Path $captureDir -AclObject $acl
-    Write-Host "Captured frames will be written to: $captureDir"
-} catch {
-    Write-Host "Could not prepare capture directory: $($_.Exception.Message)"
-}
+# The production driver does not persist captured frame data to disk.
 
 function Get-DevGen {
     $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "devgen.exe" -ErrorAction SilentlyContinue |
