@@ -8,13 +8,6 @@ using Microsoft::WRL::ComPtr;
 
 namespace UsbDisplay
 {
-    namespace
-    {
-        // For real second-monitor behavior the host needs fresh monitor content on
-        // every composition update, so dump each acquired frame.
-        constexpr UINT64 kCaptureEveryNFrames = 1;
-    }
-
     Direct3DDevice::Direct3DDevice(LUID adapterLuid) : AdapterLuid(adapterLuid)
     {
     }
@@ -180,40 +173,7 @@ namespace UsbDisplay
             ComPtr<IDXGIResource> surface;
             surface.Attach(buffer.MetaData.pSurface);
 
-            // The acquired surface IS the OS-composed image for OUR virtual monitor
-            // (and only that monitor -- an IDD is never handed the desktop or any
-            // other display). Read it back to CPU and, on a cadence, dump it to disk
-            // as deterministic proof of real capture. This is exactly where the
-            // hardware encoder will later consume the same surface. Everything is
-            // wrapped so a transient failure can never throw out of this worker
-            // thread and terminate the UMDF host.
             LARGE_INTEGER now = {}; QueryPerformanceCounter(&now);
-            try
-            {
-                if (!m_capturer)
-                {
-                    m_capturer = std::make_unique<FrameCapturer>(m_device->Device, m_device->Context);
-                }
-                // The full-frame GPU->CPU readback is heavy, so validate on the dump
-                // cadence rather than every frame; the encoder milestone consumes the
-                // surface on the GPU (no CPU stall) every frame instead.
-                if (m_capturer && surface && (frameCount % kCaptureEveryNFrames) == 0)
-                {
-                    ComPtr<ID3D11Texture2D> srcTex;
-                    if (SUCCEEDED(surface.As(&srcTex)) && m_capturer->Capture(srcTex.Get()))
-                    {
-                        wchar_t path[512];
-                        _snwprintf_s(path, _TRUNCATE, L"%s\\capture_%06llu.bmp",
-                                     m_capturer->OutputDir().c_str(), (unsigned long long)frameCount);
-                        m_capturer->DumpBmp(path);
-                    }
-                }
-            }
-            catch (...)
-            {
-                USBLOG_WARN(L"ProcessFrames: capture threw; disabling capture");
-                m_capturer.reset();
-            }
 
             if (frameCount == 0 || (frameCount % 60) == 0)
             {

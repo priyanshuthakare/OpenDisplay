@@ -43,9 +43,8 @@ Three slices are implemented today.
 
 - Enumerates a virtual `USBDisplay` monitor with a full 128-byte EDID
 - Loads cleanly (problem code 0) and appears as an additional display adapter
-- Drives an OS-assigned swap chain and captures the actual composed contents of
-  the virtual monitor (GPU→CPU surface readback), dumping frames to disk as
-  deterministic proof
+- Drives an OS-assigned swap chain for the virtual monitor without persisting
+  frame data to disk
 - Extend and Duplicate work in Windows Display Settings
 
 See [docs/idd-driver.md](docs/idd-driver.md) for the driver architecture, the
@@ -79,7 +78,7 @@ Windows virtual monitor on an Android tablet over `adb forward`.
 Current implementation:
 
 - The Windows IDD enumerates a virtual `USBDisplay` monitor and captures its
-  composed frames to `%ProgramData%\USBDisplay\capture`.
+  composed frames only in-memory inside the swap-chain pipeline.
 - The host `stream-capture` command continuously encodes newly captured frames
   and streams them over ADB-forwarded USB transport.
 - The Android app listens on `127.0.0.1:27183`, decodes the protocol frames
@@ -87,8 +86,7 @@ Current implementation:
 
 Known limitations:
 
-- The host/driver handoff is still disk-backed (no shared-memory boundary yet),
-  so latency and disk I/O are higher than the planned production design.
+- The live host/driver handoff path is still under active implementation.
 - Android touch/pen/keyboard/mouse return input is not implemented yet.
 
 ## Step-by-Step Guide
@@ -139,8 +137,8 @@ This does not stream the desktop yet. It only proves the host CLI and protocol l
 
 ### 3a. Encode Captured Frames (optional)
 
-If the IDD driver has written frames to `%ProgramData%\USBDisplay\capture`, you
-can encode them to a validated H.264 stream on the host:
+If you have a BMP frame sequence (for example, from lab tooling), you can encode
+it to a validated H.264 stream on the host:
 
 ```powershell
 cargo run -p usbdisplay-streamer -- encode-capture `
@@ -218,7 +216,7 @@ When the driver, streamer, and decoder are implemented, the user flow will be:
 8. Android decodes and renders the stream.
 9. Touch, pen, keyboard, and mouse input travel back to Windows.
 
-### 7a. Stream Captured Frames to Android (ADB USB path)
+### 7a. Stream BMP Frames to Android (ADB USB path)
 
 This repository now provides a concrete USB debug streaming path from host to
 tablet using `adb forward` and the shared transport protocol.
@@ -253,14 +251,12 @@ Today, you can:
 - Run the host CLI probe.
 - Build, sign, and install the Windows IDD, and see a virtual `USBDisplay`
   monitor enumerate in Windows Display Settings (Extend or Duplicate).
-- Verify the driver captures the virtual monitor via the frames it writes to
-  `%ProgramData%\USBDisplay\capture`.
 - Encode those captured frames to a validated H.264 stream on the host
   (`encode-capture`), with structural and decode-round-trip checks.
 - Build and install the Android fullscreen client shell.
 - Run the Android local stream receiver + decoder with ADB-forwarded transport packets.
 - Verify ADB sees the tablet over USB.
-- Use the tablet as a USB-connected secondary display in the current disk-backed pipeline.
+- Use the tablet as a USB-connected secondary display in the current debug streaming pipeline.
 - Use the docs in `docs/` to continue improving capture, transport, decode, and input layers.
 
 You cannot yet:
