@@ -17,6 +17,7 @@ use usbdisplay_transport::{
 
 use crate::adb::{self, AdbDeviceState};
 use crate::input_inject;
+use crate::wifi;
 
 pub struct StreamCaptureArgs {
     pub input_dir: PathBuf,
@@ -34,6 +35,20 @@ pub struct StreamCaptureArgs {
     /// usable as a real second monitor. When false, every captured frame is
     /// replayed in order at a fixed fps (demo / file-replay behavior).
     pub live: bool,
+    /// Selected transport. USB is the current ADB-forwarded path; WiFi is a
+    /// PR-1 stub that fails loudly until the LAN path lands.
+    pub transport: Transport,
+    /// WiFi tablet address (bare IP, ip:port, or QR JSON). WiFi only.
+    pub device_ip: Option<String>,
+    /// WiFi pairing PIN shown on the tablet. WiFi only.
+    pub pin: Option<String>,
+}
+
+/// Transport selector for `stream-capture`. Mirrors the CLI `--transport` flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Usb,
+    Wifi,
 }
 
 struct AdbForwardGuard {
@@ -205,9 +220,13 @@ fn connect_with_retry(port: u16) -> Result<TcpStream> {
 
 /// Wraps one coded picture in a protocol `EncodedFrame`, packetizes it, and
 /// writes the length-prefixed transport packets to the socket. Shared by the
-/// live and replay paths so framing stays identical.
-struct FrameSender<'a> {
-    socket: &'a mut TcpStream,
+/// live and replay paths — and by USB and (future) WiFi transports — so
+/// framing stays identical.
+///
+/// Generic over `Write` so the ADB `TcpStream` today and the TLS WiFi stream
+/// in PR-3 share the exact same send path.
+struct FrameSender<W: Write> {
+    socket: W,
     packetizer: Packetizer,
     codec: Codec,
     width: u16,
@@ -218,7 +237,7 @@ struct FrameSender<'a> {
     total_frames: usize,
 }
 
-impl FrameSender<'_> {
+impl<W: Write> FrameSender<W> {
     fn send_unit(&mut self, unit: &usbdisplay_encoder::EncodedUnit) -> Result<()> {
         let flags = if unit.keyframe {
             FrameFlags::KEYFRAME
@@ -238,10 +257,7 @@ impl FrameSender<'_> {
         self.frame_sequence = self.frame_sequence.wrapping_add(1).max(1);
 
         for packet in self.packetizer.packetize_frame(&encoded_frame)? {
-            let bytes = packet.encode();
-            let packet_len = (bytes.len() as u32).to_le_bytes();
-            self.socket.write_all(&packet_len)?;
-            self.socket.write_all(&bytes)?;
+            write_framed_packet(&mut self.socket, &packet)?;
             self.total_packets += 1;
         }
         self.total_frames += 1;
@@ -249,7 +265,37 @@ impl FrameSender<'_> {
     }
 }
 
+/// Encode one transport packet with the shared `u32LE(len) + bytes` framing
+/// and write it to any video sink (USB TCP today, TLS WiFi in PR-3).
+pub fn write_framed_packet<W: Write>(socket: &mut W, packet: &TransportPacket) -> Result<()> {
+    let bytes = packet.encode();
+    let packet_len = (bytes.len() as u32).to_le_bytes();
+    socket.write_all(&packet_len)?;
+    socket.write_all(&bytes)?;
+    Ok(())
+}
+
 pub fn run(args: StreamCaptureArgs) -> Result<()> {
+    // WiFi is a PR-1 stub: fail fast with actionable guidance before touching
+    // the encoder or ADB so `--transport wifi` never silently falls back.
+    if args.transport == Transport::Wifi {
+        let raw = args.device_ip.as_deref().unwrap_or_default();
+        if raw.trim().is_empty() {
+            bail!(
+                "wifi transport needs --device-ip <ip|ip:port|QR-JSON> \
+                 (tablet WiFi Pair screen shows the QR; plaintext LAN lands in PR-2, PIN+TLS in PR-3)"
+            );
+        }
+        let device = wifi::parse_device(raw)?;
+        println!("wifi_device={}", device.addr());
+        if let Some(fp) = &device.fingerprint {
+            println!("wifi_fingerprint={fp}");
+        }
+        // Always errors in PR-1; PR-2 replaces this with the LAN dial.
+        wifi::connect(&device, args.pin.as_deref())?;
+        unreachable!("wifi::connect is a PR-1 stub and must error");
+    }
+
     let mut frames = collect_frames(&args.input_dir)?;
     while args.loop_forever && frames.is_empty() {
         println!("waiting_for_capture_frames=true");

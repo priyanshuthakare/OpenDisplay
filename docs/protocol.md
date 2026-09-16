@@ -38,8 +38,10 @@ The stream frame protocol is wrapped by the `usbdisplay-transport` crate. Transp
 - ACK packets
 - Heartbeat packets
 - Keyframe request packets
+- Handshake packets (kind 6, WiFi pairing / capability negotiation; ignored by
+  receivers that only expect video — same rule as other non-Fragment kinds)
 
-This keeps the frame format stable while allowing the ADB compatibility bridge and native USB bulk backend to share reliability behavior.
+This keeps the frame format stable while allowing the ADB compatibility bridge, native USB bulk backend, and WiFi TLS transport to share reliability behavior.
 
 ## Input Return Channel
 
