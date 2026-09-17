@@ -3,14 +3,7 @@
 The `driver/idd` component is a Windows UMDF Indirect Display Driver built on
 IddCx. It presents a virtual `USBDisplay` monitor to the Windows display stack.
 As of this milestone the driver **enumerates a real monitor, loads cleanly
-(problem code 0), drives an OS-assigned swap chain, and captures the actual
-composed contents of that virtual monitor** by reading back the swap-chain
-surface it is handed each frame.
-
-Encode and USB transport are still ahead; the driver currently reads back the
-virtual monitor surface to a CPU buffer and writes it to disk as deterministic
-proof, which is the exact hand-off point where the hardware encoder will consume
-the same surface.
+(problem code 0), and drives an OS-assigned swap chain**.
 
 ## What runs today
 
@@ -18,10 +11,6 @@ the same surface.
   produced by `BuildEdid()`, including the product-name descriptor.
 - The device is `Status: OK`, `Problem: 0`, and appears as an additional
   display adapter (`USBDisplay [OK]`).
-- The swap-chain worker reads back the acquired surface (the OS-composed image
-  for our monitor) into a CPU BGRA buffer and periodically writes it to disk as
-  BMP. Consecutive dumps differ, proving live capture rather than a static
-  buffer.
 - Windows Display Settings can Extend or Duplicate onto the virtual monitor.
 
 ## Component map
@@ -32,7 +21,7 @@ the same surface.
 | `Device.cpp/.h` | Adapter lifetime, monitor creation, arrival/departure |
 | `IndirectMonitor.cpp` | Per-monitor swap-chain assignment |
 | `SwapChainProcessor.cpp/.h` | D3D11 render device + the frame-acquire worker thread |
-| `FrameCapture.cpp/.h` | `FrameCapturer` — GPU→CPU readback of the acquired surface, BGRA normalization, BMP dump |
+| `FrameCapture.cpp/.h` | `FrameCapturer` — GPU→CPU readback of the acquired surface, BGRA normalization (in-memory only) |
 | `Edid.*` | `BuildEdid()` 128-byte EDID with product-name descriptor |
 | `Trace.cpp/.h` | TraceLogging provider + `USBLOG_*` macros |
 
@@ -47,9 +36,7 @@ the running driver:
    reassigns.
 2. Loop on `IddCxSwapChainReleaseAndAcquireBuffer`, waiting on the new-frame and
    stop events with a 16 ms timeout on `E_PENDING`.
-3. Read the acquired surface back to a CPU BGRA buffer via `FrameCapturer` and
-   dump a BMP every 120 frames.
-4. `IddCxSwapChainFinishedProcessingFrame` and repeat.
+3. `IddCxSwapChainFinishedProcessingFrame` and repeat.
 
 ### Capture: reading back our own monitor
 
@@ -68,14 +55,9 @@ does the GPU→CPU readback:
    width×4 and often padded). `B8G8R8A8`, `R8G8B8A8`, and `R10G10B10A2` layouts
    are handled.
 
-The normalized frame lives in a CPU buffer (`FrameCapturer::Pixels()`) — that is
-the hand-off point for the future hardware encoder, which will instead consume
-the surface on the GPU every frame. The full readback is heavy, so validation
-dumps run on the 120-frame cadence rather than every frame.
-
-`FrameCapturer` writes to `%ProgramData%\USBDisplay\capture` (falling back to the
-temp directory), creating each path component with `kernel32` only so nothing
-extra is loaded into the sandboxed UMDF host.
+When enabled for diagnostics, the normalized frame can live in a CPU buffer
+(`FrameCapturer::Pixels()`) as the hand-off point for the future encoder path.
+The production frame loop does not persist frame data to disk.
 
 ## Debugging journey (why the code looks the way it does)
 
@@ -117,18 +99,6 @@ package installed, UMDF reflector (WUDFRd), ROOT device present, driver loaded
 (problem 0), adapter count, display count, and the `USBDisplay` monitor with its
 decoded EDID. It also decodes common CM problem codes (28/31/37/39/41) to make
 install failures self-explaining.
-
-To confirm capture is live:
-
-```powershell
-Get-ChildItem "$env:ProgramData\USBDisplay\capture" | Select Name,Length,LastWriteTime
-```
-
-Expect `capture_000000.bmp`, `capture_000120.bmp`, … growing over time. Open the
-newest in an image viewer to see the actual virtual-monitor contents (extend a
-window onto the USBDisplay monitor first, or it may be blank wallpaper).
-Consecutive dumps should differ, which proves live capture rather than a static
-buffer.
 
 > Reinstalling a changed driver: PnP keys the driver store on the INF
 > `DriverVer`. If you rebuild the DLL without bumping `DriverVer`, `pnputil`

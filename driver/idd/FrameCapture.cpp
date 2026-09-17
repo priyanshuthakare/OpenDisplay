@@ -1,8 +1,6 @@
 #include "FrameCapture.h"
 #include "Trace.h"
 
-#include <cstdio>
-
 using Microsoft::WRL::ComPtr;
 
 namespace UsbDisplay
@@ -47,38 +45,7 @@ namespace UsbDisplay
     FrameCapturer::FrameCapturer(ComPtr<ID3D11Device> device, ComPtr<ID3D11DeviceContext> context)
         : m_device(std::move(device)), m_context(std::move(context))
     {
-        m_outputDir = ChooseOutputDir();
-        USBLOG_INFO(L"FrameCapture: capturer ready, frames -> %s", m_outputDir.c_str());
-    }
-
-    std::wstring FrameCapturer::ChooseOutputDir()
-    {
-        // kernel32 only (no shell32) so nothing extra loads into the sandboxed
-        // UMDF host. %ProgramData%\USBDisplay\capture, created component by
-        // component. Kept separate from the retired test-pattern "frames" dir so
-        // captured output is unambiguous.
-        wchar_t expanded[MAX_PATH] = {};
-        std::wstring dir;
-        if (ExpandEnvironmentStringsW(L"%ProgramData%\\USBDisplay\\capture", expanded, MAX_PATH) > 0)
-        {
-            dir = expanded;
-        }
-        else
-        {
-            wchar_t tmp[MAX_PATH] = {};
-            GetTempPathW(MAX_PATH, tmp);
-            dir = std::wstring(tmp) + L"USBDisplay\\capture";
-        }
-        std::wstring partial;
-        for (size_t i = 0; i < dir.size(); ++i)
-        {
-            partial += dir[i];
-            if (dir[i] == L'\\' || i + 1 == dir.size())
-            {
-                if (partial.size() > 3) { CreateDirectoryW(partial.c_str(), nullptr); }
-            }
-        }
-        return dir;
+        USBLOG_INFO(L"FrameCapture: capturer ready (in-memory only)");
     }
 
     bool FrameCapturer::EnsureStaging(const D3D11_TEXTURE2D_DESC& srcDesc)
@@ -177,31 +144,4 @@ namespace UsbDisplay
         return true;
     }
 
-    bool FrameCapturer::DumpBmp(const std::wstring& path)
-    {
-        if (m_pixels.empty() || m_width == 0 || m_height == 0)
-        {
-            return false;
-        }
-
-#pragma pack(push, 1)
-        struct BmpFileHeader { uint16_t bfType; uint32_t bfSize; uint16_t r1, r2; uint32_t bfOffBits; };
-        struct BmpInfoHeader { uint32_t biSize; int32_t biWidth; int32_t biHeight; uint16_t biPlanes;
-                               uint16_t biBitCount; uint32_t biCompression; uint32_t biSizeImage;
-                               int32_t x, y; uint32_t clrUsed, clrImportant; };
-#pragma pack(pop)
-        const uint32_t imgSize = m_width * m_height * 4;
-        BmpFileHeader fh = { 0x4D42, static_cast<uint32_t>(sizeof(fh) + sizeof(BmpInfoHeader) + imgSize), 0, 0,
-                             sizeof(fh) + sizeof(BmpInfoHeader) };
-        BmpInfoHeader ih = { sizeof(BmpInfoHeader), static_cast<int32_t>(m_width),
-                             -static_cast<int32_t>(m_height), 1, 32, 0 /*BI_RGB*/, imgSize, 2835, 2835, 0, 0 };
-
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, path.c_str(), L"wb") != 0 || !f) { return false; }
-        fwrite(&fh, sizeof(fh), 1, f);
-        fwrite(&ih, sizeof(ih), 1, f);
-        fwrite(m_pixels.data(), imgSize, 1, f);
-        fclose(f);
-        return true;
-    }
 }
