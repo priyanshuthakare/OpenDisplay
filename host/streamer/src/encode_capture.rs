@@ -11,9 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use usbdisplay_encoder::{
-    nal, read_bgra_bmp, select_encoder, Codec, EncodedUnit, EncoderConfig,
-};
+use usbdisplay_encoder::{nal, read_bgra_bmp, select_encoder, Codec, EncodedUnit, EncoderConfig};
 use usbdisplay_protocol::{EncodedFrame, FrameFlags};
 use usbdisplay_transport::{Packetizer, DEFAULT_MAX_PACKET_PAYLOAD};
 
@@ -115,8 +113,7 @@ pub fn run(args: EncodeCaptureArgs) -> Result<()> {
     for u in &units {
         stream.extend_from_slice(&u.bytes);
     }
-    fs::write(&args.out, &stream)
-        .with_context(|| format!("writing {}", args.out.display()))?;
+    fs::write(&args.out, &stream).with_context(|| format!("writing {}", args.out.display()))?;
     println!("encoded_units={}", units.len());
     println!("output_bytes={}", stream.len());
     println!("output_path={}", args.out.display());

@@ -21,11 +21,11 @@
 //! * [`color`] -- CPU BGRA -> NV12 conversion (pure Rust, unit tested).
 //! * [`probe::select_encoder`] -- picks the best available backend.
 
+pub mod bmp;
 mod color;
 mod config;
 mod encoder;
 mod frame;
-pub mod bmp;
 pub mod nal;
 pub mod probe;
 pub mod validate;

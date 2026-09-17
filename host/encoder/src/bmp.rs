@@ -55,7 +55,9 @@ pub fn read_bgra_bmp(bytes: &[u8]) -> Result<BgraFrame, BmpError> {
     let pixel_offset = u32_at(bytes, 10) as usize;
     let info_size = u32_at(bytes, 14) as usize;
     if info_size < INFO_HEADER_LEN {
-        return Err(BmpError::Unsupported(format!("info header size {info_size}")));
+        return Err(BmpError::Unsupported(format!(
+            "info header size {info_size}"
+        )));
     }
 
     let width = i32_at(bytes, 18);

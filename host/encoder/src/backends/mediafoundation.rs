@@ -26,7 +26,7 @@ mod windows_impl {
     use crate::encoder::EncodedUnit;
     use crate::BgraFrame;
 
-    use windows::core::{GUID, Interface};
+    use windows::core::{Interface, GUID};
     use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Media::MediaFoundation::*;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
@@ -120,8 +120,7 @@ mod windows_impl {
                 Self::configure_input(&transform, &config)?;
             }
 
-            let (input_stream_id, output_stream_id) =
-                unsafe { stream_ids(&transform)? };
+            let (input_stream_id, output_stream_id) = unsafe { stream_ids(&transform)? };
 
             // The MFT exposes its event queue via IMFMediaEventGenerator.
             let event_gen: IMFMediaEventGenerator = transform
@@ -159,14 +158,9 @@ mod windows_impl {
             out_type
                 .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
                 .and_then(|_| out_type.SetGUID(&MF_MT_SUBTYPE, &subtype))
+                .and_then(|_| out_type.SetUINT32(&MF_MT_AVG_BITRATE, config.bitrate_bps))
                 .and_then(|_| {
-                    out_type.SetUINT32(&MF_MT_AVG_BITRATE, config.bitrate_bps)
-                })
-                .and_then(|_| {
-                    out_type.SetUINT32(
-                        &MF_MT_INTERLACE_MODE,
-                        MFVideoInterlace_Progressive.0 as u32,
-                    )
+                    out_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
                 })
                 .map_err(|e| EncoderError::Backend(format!("output type attrs: {e}")))?;
 
@@ -190,10 +184,7 @@ mod windows_impl {
                 .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
                 .and_then(|_| in_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12))
                 .and_then(|_| {
-                    in_type.SetUINT32(
-                        &MF_MT_INTERLACE_MODE,
-                        MFVideoInterlace_Progressive.0 as u32,
-                    )
+                    in_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
                 })
                 .map_err(|e| EncoderError::Backend(format!("input type attrs: {e}")))?;
 
@@ -287,11 +278,9 @@ mod windows_impl {
             };
 
             let mut status = 0u32;
-            let hr = self.transform.ProcessOutput(
-                0,
-                std::slice::from_mut(&mut out_buffer),
-                &mut status,
-            );
+            let hr =
+                self.transform
+                    .ProcessOutput(0, std::slice::from_mut(&mut out_buffer), &mut status);
 
             match hr {
                 Ok(()) => {
@@ -317,10 +306,7 @@ mod windows_impl {
             }
         }
 
-        unsafe fn allocate_output_sample(
-            &self,
-            size: u32,
-        ) -> Result<IMFSample, EncoderError> {
+        unsafe fn allocate_output_sample(&self, size: u32) -> Result<IMFSample, EncoderError> {
             let buffer: IMFMediaBuffer = MFCreateMemoryBuffer(size.max(1))
                 .map_err(|e| EncoderError::Backend(format!("out MFCreateMemoryBuffer: {e}")))?;
             let sample: IMFSample = MFCreateSample()
@@ -339,10 +325,7 @@ mod windows_impl {
             Self::configure_output(&self.transform, &self.config, subtype)
         }
 
-        unsafe fn sample_to_unit(
-            &self,
-            sample: &IMFSample,
-        ) -> Result<EncodedUnit, EncoderError> {
+        unsafe fn sample_to_unit(&self, sample: &IMFSample) -> Result<EncodedUnit, EncoderError> {
             let buffer = sample
                 .ConvertToContiguousBuffer()
                 .map_err(|e| EncoderError::Backend(format!("ConvertToContiguousBuffer: {e}")))?;
@@ -407,9 +390,7 @@ mod windows_impl {
                     if evt == METransformNeedInput {
                         self.transform
                             .ProcessInput(self.input_stream_id, &sample, 0)
-                            .map_err(|e| {
-                                EncoderError::Backend(format!("ProcessInput: {e}"))
-                            })?;
+                            .map_err(|e| EncoderError::Backend(format!("ProcessInput: {e}")))?;
                         fed = true;
                     } else if evt == METransformHaveOutput {
                         if let Some(u) = self.process_output()? {
@@ -456,9 +437,7 @@ mod windows_impl {
 
     /// Enumerate hardware encoder MFTs for the given output subtype and return
     /// the first that activates.
-    unsafe fn enumerate_hardware_encoder(
-        subtype: GUID,
-    ) -> Result<IMFTransform, EncoderError> {
+    unsafe fn enumerate_hardware_encoder(subtype: GUID) -> Result<IMFTransform, EncoderError> {
         let output_info = MFT_REGISTER_TYPE_INFO {
             guidMajorType: MFMediaType_Video,
             guidSubtype: subtype,
