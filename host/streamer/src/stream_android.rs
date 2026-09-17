@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use rustls::StreamOwned;
 
 use anyhow::{bail, Context, Result};
 use usbdisplay_encoder::{read_bgra_bmp, select_encoder, Codec, EncoderConfig};
@@ -18,9 +19,71 @@ use usbdisplay_transport::{
 use crate::adb::{self, AdbDeviceState};
 use crate::input_inject;
 use crate::wifi;
+use rustls::ClientConnection;
 
 /// How many streamed frames pass between `--stats-json` lines.
 const STATS_FRAME_INTERVAL: usize = 60;
+
+/// Wrapper for either plain TCP or TLS stream for generic use.
+pub enum VideoStream {
+    Plain(TcpStream),
+    Tls(StreamOwned<ClientConnection, TcpStream>),
+}
+
+impl Write for VideoStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            VideoStream::Plain(s) => s.write(buf),
+            VideoStream::Tls(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            VideoStream::Plain(s) => s.flush(),
+            VideoStream::Tls(s) => s.flush(),
+        }
+    }
+}
+
+impl Read for VideoStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            VideoStream::Plain(s) => s.read(buf),
+            VideoStream::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl VideoStream {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        match self {
+            VideoStream::Plain(s) => Ok(VideoStream::Plain(s.try_clone()?)),
+            VideoStream::Tls(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "TLS stream cannot be cloned",
+            )),
+        }
+    }
+
+    fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
+        match self {
+            VideoStream::Plain(s) => s.set_nodelay(nodelay),
+            VideoStream::Tls(s) => s.get_ref().set_nodelay(nodelay),
+        }
+    }
+
+    fn shutdown(&self) {
+        match self {
+            VideoStream::Plain(s) => {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+            VideoStream::Tls(s) => {
+                let _ = s.get_ref().shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+}
 
 pub struct StreamCaptureArgs {
     pub input_dir: PathBuf,
@@ -46,6 +109,7 @@ pub struct StreamCaptureArgs {
     /// WiFi pairing PIN shown on the tablet. WiFi only.
     pub pin: Option<String>,
     /// Allow plaintext WiFi LAN (dev-only, no PIN/TLS). Requires --transport wifi.
+    /// DEPRECATED in PR-3: removed, TLS required.
     pub insecure_lan: bool,
     /// Print streaming stats as JSON every 60 frames.
     pub stats_json: bool,
@@ -141,7 +205,7 @@ fn ensure_adb_forward(serial: &str, port: u16) -> Result<AdbForwardGuard> {
 /// `Control` input events into the host. Runs until the socket closes or
 /// `running` is cleared. Errors are terminal for the reader only; the video
 /// path keeps streaming.
-fn run_input_reader(mut socket: TcpStream, running: Arc<AtomicBool>, injected: Arc<AtomicU64>) {
+fn run_input_reader(mut socket: VideoStream, running: Arc<AtomicBool>, injected: Arc<AtomicU64>) {
     let mut sink = input_inject::default_sink();
     // A short read timeout lets the loop notice `running` being cleared even
     // when the device is idle and no bytes are arriving.
@@ -189,7 +253,7 @@ enum ReadOutcome {
 
 /// `read_exact` that reports a read timeout distinctly from a real close, so
 /// the caller can re-check its run flag while idle.
-fn read_exact_timeout_aware(socket: &mut TcpStream, buf: &mut [u8]) -> ReadOutcome {
+fn read_exact_timeout_aware(socket: &mut VideoStream, buf: &mut [u8]) -> ReadOutcome {
     let mut filled = 0;
     while filled < buf.len() {
         match socket.read(&mut buf[filled..]) {
@@ -311,25 +375,30 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             println!("wifi_fingerprint={fp}");
         }
 
-        // PR-2: plaintext LAN requires --insecure-lan flag
-        if !args.insecure_lan {
+        // PR-3: Remove --insecure-lan flag, TLS required
+        if args.insecure_lan {
             bail!(
-                "refusing plaintext WiFi without --insecure-lan (encrypted PIN+TLS lands in PR-3)"
+                "--insecure-lan flag removed in PR-3; use --pin for encrypted TLS connection"
             );
         }
-        println!("wifi_encryption=none reason=--insecure-lan");
-        if args.pin.is_some() {
-            println!("wifi_pin=ignored reason=plaintext-lan-has-no-pairing");
-        }
 
-        // Connect via plaintext LAN
-        let mut socket = wifi::connect_plain(&device)?;
+        // Connect via TLS with PIN
+        let pin = args.pin.as_deref();
+        if pin.is_none() {
+            bail!("WiFi requires --pin <6-digit-code> shown on tablet");
+        }
+        println!("wifi_encryption=tls-1.3");
+
+        let connection = wifi::connect_tls(&device, pin)?;
         println!("android_connection=established");
+
+        // Wrap TLS stream for video streaming
+        let video_stream = VideoStream::Tls(connection.stream);
 
         // Spawn the reverse input channel on a clone of the socket
         let input_running = Arc::new(AtomicBool::new(true));
         let input_injected = Arc::new(AtomicU64::new(0));
-        let input_reader = match socket.try_clone() {
+        let input_reader = match video_stream.try_clone() {
             Ok(reader_socket) => {
                 let running = Arc::clone(&input_running);
                 let injected = Arc::clone(&input_injected);
@@ -383,7 +452,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         println!("stream_encoder_backend={}", encoder.backend_name());
 
         let mut sender = FrameSender {
-            socket: &mut socket,
+            socket: &mut video_stream,
             packetizer: Packetizer::new(DEFAULT_MAX_PACKET_PAYLOAD),
             codec: args.codec,
             width: first.width as u16,
@@ -526,7 +595,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         );
 
         input_running.store(false, Ordering::Relaxed);
-        drop(socket);
+        video_stream.shutdown();
         if let Some(handle) = input_reader {
             let _ = handle.join();
         }
@@ -583,17 +652,19 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     let _forward = ensure_adb_forward(&serial, args.port)?;
     println!("adb_forward=tcp:{}->tcp:{}", args.port, args.port);
     println!("waiting_for_android_listener=true");
-    let mut socket = connect_with_retry(args.port)?;
-    socket
+    let plain_socket = connect_with_retry(args.port)?;
+    plain_socket
         .set_nodelay(true)
         .context("failed to set TCP_NODELAY")?;
     println!("android_connection=established");
+
+    let mut video_stream = VideoStream::Plain(plain_socket);
 
     // Spawn the reverse input channel on a clone of the socket. The video path
     // below keeps ownership of `socket` for writes.
     let input_running = Arc::new(AtomicBool::new(true));
     let input_injected = Arc::new(AtomicU64::new(0));
-    let input_reader = match socket.try_clone() {
+    let input_reader = match video_stream.try_clone() {
         Ok(reader_socket) => {
             let running = Arc::clone(&input_running);
             let injected = Arc::clone(&input_injected);
@@ -609,7 +680,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     };
 
     let mut sender = FrameSender {
-        socket: &mut socket,
+        socket: &mut video_stream,
         packetizer: Packetizer::new(DEFAULT_MAX_PACKET_PAYLOAD),
         codec: args.codec,
         width: first.width as u16,
@@ -764,7 +835,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     // Stop the reverse input channel and drain the thread. Dropping the write
     // half and clearing the flag unblocks the reader's blocking read.
     input_running.store(false, Ordering::Relaxed);
-    drop(socket);
+    video_stream.shutdown();
     if let Some(handle) = input_reader {
         let _ = handle.join();
     }

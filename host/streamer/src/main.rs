@@ -1,6 +1,7 @@
 mod adb;
 mod encode_capture;
 mod input_inject;
+mod pairing;
 mod stream_android;
 mod wifi;
 
@@ -114,9 +115,6 @@ enum Command {
         /// WiFi pairing PIN shown on the tablet. Only used with --transport wifi.
         #[arg(long)]
         pin: Option<String>,
-        /// Allow plaintext WiFi LAN (dev-only, no PIN/TLS). Requires --transport wifi.
-        #[arg(long, default_value_t = false)]
-        insecure_lan: bool,
         /// Print streaming stats as JSON every 60 frames.
         #[arg(long, default_value_t = false)]
         stats_json: bool,
@@ -228,7 +226,6 @@ fn main() -> Result<()> {
             transport,
             device_ip,
             pin,
-            insecure_lan,
             stats_json,
         } => {
             let codec = match codec.to_ascii_lowercase().as_str() {
@@ -255,7 +252,7 @@ fn main() -> Result<()> {
                 transport,
                 device_ip,
                 pin,
-                insecure_lan,
+                insecure_lan: false, // Deprecated in PR-3
                 stats_json,
             })?;
         }
