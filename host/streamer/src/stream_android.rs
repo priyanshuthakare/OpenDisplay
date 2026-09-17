@@ -19,6 +19,9 @@ use crate::adb::{self, AdbDeviceState};
 use crate::input_inject;
 use crate::wifi;
 
+/// How many streamed frames pass between `--stats-json` lines.
+const STATS_FRAME_INTERVAL: usize = 60;
+
 pub struct StreamCaptureArgs {
     pub input_dir: PathBuf,
     pub codec: Codec,
@@ -42,6 +45,10 @@ pub struct StreamCaptureArgs {
     pub device_ip: Option<String>,
     /// WiFi pairing PIN shown on the tablet. WiFi only.
     pub pin: Option<String>,
+    /// Allow plaintext WiFi LAN (dev-only, no PIN/TLS). Requires --transport wifi.
+    pub insecure_lan: bool,
+    /// Print streaming stats as JSON every 60 frames.
+    pub stats_json: bool,
 }
 
 /// Transport selector for `stream-capture`. Mirrors the CLI `--transport` flag.
@@ -235,6 +242,8 @@ struct FrameSender<W: Write> {
     frame_sequence: u64,
     total_packets: usize,
     total_frames: usize,
+    write_stall_ms_max: f64,
+    stats_json: bool,
 }
 
 impl<W: Write> FrameSender<W> {
@@ -256,12 +265,22 @@ impl<W: Write> FrameSender<W> {
         )?;
         self.frame_sequence = self.frame_sequence.wrapping_add(1).max(1);
 
+        let start = Instant::now();
         for packet in self.packetizer.packetize_frame(&encoded_frame)? {
             write_framed_packet(&mut self.socket, &packet)?;
             self.total_packets += 1;
         }
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        self.write_stall_ms_max = self.write_stall_ms_max.max(elapsed_ms);
         self.total_frames += 1;
         Ok(())
+    }
+
+    fn stats_line(&self) -> String {
+        format!(
+            r#"{{"streamed_frames":{},"streamed_packets":{},"write_stall_ms_max":{:.2}}}"#,
+            self.total_frames, self.total_packets, self.write_stall_ms_max
+        )
     }
 }
 
@@ -291,9 +310,235 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         if let Some(fp) = &device.fingerprint {
             println!("wifi_fingerprint={fp}");
         }
-        // Always errors in PR-1; PR-2 replaces this with the LAN dial.
-        wifi::connect(&device, args.pin.as_deref())?;
-        unreachable!("wifi::connect is a PR-1 stub and must error");
+
+        // PR-2: plaintext LAN requires --insecure-lan flag
+        if !args.insecure_lan {
+            bail!(
+                "refusing plaintext WiFi without --insecure-lan (encrypted PIN+TLS lands in PR-3)"
+            );
+        }
+        println!("wifi_encryption=none reason=--insecure-lan");
+        if args.pin.is_some() {
+            println!("wifi_pin=ignored reason=plaintext-lan-has-no-pairing");
+        }
+
+        // Connect via plaintext LAN
+        let mut socket = wifi::connect_plain(&device)?;
+        println!("android_connection=established");
+
+        // Spawn the reverse input channel on a clone of the socket
+        let input_running = Arc::new(AtomicBool::new(true));
+        let input_injected = Arc::new(AtomicU64::new(0));
+        let input_reader = match socket.try_clone() {
+            Ok(reader_socket) => {
+                let running = Arc::clone(&input_running);
+                let injected = Arc::clone(&input_injected);
+                println!("input_return_channel=enabled");
+                Some(thread::spawn(move || {
+                    run_input_reader(reader_socket, running, injected)
+                }))
+            }
+            Err(err) => {
+                println!("input_return_channel=disabled reason=\"clone failed: {err}\"");
+                None
+            }
+        };
+
+        // Run the existing encode loop over the WiFi socket
+        let mut frames = collect_frames(&args.input_dir)?;
+        while args.loop_forever && frames.is_empty() {
+            println!("waiting_for_capture_frames=true");
+            thread::sleep(Duration::from_millis(250));
+            frames = collect_frames(&args.input_dir)?;
+        }
+        if frames.is_empty() {
+            bail!(
+                "no capture_*.bmp frames found in {}",
+                args.input_dir.display()
+            );
+        }
+
+        let first = read_bgra_bmp(&fs::read(&frames[0])?)
+            .with_context(|| format!("decoding {}", frames[0].display()))?;
+        println!("stream_frame_size={}x{}", first.width, first.height);
+
+        let config = EncoderConfig::new(first.width, first.height)
+            .with_fps(args.fps)
+            .with_bitrate(args.bitrate_bps)
+            .with_gop(args.gop)
+            .with_codec(args.codec);
+
+        let (encoder, statuses) = select_encoder(&config);
+        for s in &statuses {
+            println!(
+                "backend {}: {}",
+                s.backend.name(),
+                if s.available { "SELECTED" } else { &s.detail }
+            );
+        }
+        let mut encoder = match encoder {
+            Some(e) => e,
+            None => bail!("no encoder backend available (see backend lines above)"),
+        };
+        println!("stream_encoder_backend={}", encoder.backend_name());
+
+        let mut sender = FrameSender {
+            socket: &mut socket,
+            packetizer: Packetizer::new(DEFAULT_MAX_PACKET_PAYLOAD),
+            codec: args.codec,
+            width: first.width as u16,
+            height: first.height as u16,
+            fps: args.fps,
+            frame_sequence: 1,
+            total_packets: 0,
+            total_frames: 0,
+            write_stall_ms_max: 0.0,
+            stats_json: args.stats_json,
+        };
+        let mut total_input_frames = 0usize;
+        let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
+
+        if args.live {
+            let playback_start = Instant::now();
+            let mut last_streamed: Option<PathBuf> = None;
+            loop {
+                if total_input_frames >= max_input_frames {
+                    break;
+                }
+                frames = collect_frames(&args.input_dir)?;
+                let newest = match frames.last() {
+                    Some(p) => p.clone(),
+                    None => {
+                        if args.loop_forever {
+                            thread::sleep(Duration::from_millis(4));
+                            continue;
+                        }
+                        break;
+                    }
+                };
+
+                if last_streamed.as_ref() == Some(&newest) {
+                    if args.loop_forever {
+                        thread::sleep(Duration::from_millis(4));
+                        continue;
+                    }
+                    break;
+                }
+
+                for stale in frames.iter().take(frames.len().saturating_sub(1)) {
+                    let _ = fs::remove_file(stale);
+                }
+
+                let frame = match read_bgra_bmp(&fs::read(&newest)?) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                };
+                if frame.width != first.width || frame.height != first.height {
+                    bail!(
+                        "capture size changed to {}x{} (was {}x{}); restart stream",
+                        frame.width,
+                        frame.height,
+                        first.width,
+                        first.height
+                    );
+                }
+
+                let ts = playback_start.elapsed().as_nanos() as u64;
+                total_input_frames += 1;
+                let units = encoder.encode(&frame, ts)?;
+                for unit in units {
+                    sender.send_unit(&unit)?;
+                }
+                if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
+                    println!("{}", sender.stats_line());
+                }
+                last_streamed = Some(newest);
+            }
+        } else {
+            let frame_dur_ns = 1_000_000_000u64 / (args.fps.max(1) as u64);
+            let mut source_timestamp_ns = 0u64;
+            let playback_start = Instant::now();
+            let mut first_pts_ns = None::<u64>;
+            let mut next_frame_index = 0usize;
+
+            loop {
+                frames = collect_frames(&args.input_dir)?;
+                if frames.len() <= next_frame_index {
+                    if args.loop_forever && total_input_frames < max_input_frames {
+                        thread::sleep(Duration::from_millis(16));
+                        continue;
+                    }
+                    break;
+                }
+
+                for path in frames.iter().skip(next_frame_index) {
+                    if total_input_frames >= max_input_frames {
+                        break;
+                    }
+                    let frame = read_bgra_bmp(&fs::read(path)?)
+                        .with_context(|| format!("decoding {}", path.display()))?;
+                    if frame.width != first.width || frame.height != first.height {
+                        bail!(
+                            "frame {} size {}x{} differs from first {}x{}",
+                            path.display(),
+                            frame.width,
+                            frame.height,
+                            first.width,
+                            first.height
+                        );
+                    }
+                    let ts = source_timestamp_ns;
+                    source_timestamp_ns = source_timestamp_ns.saturating_add(frame_dur_ns);
+                    total_input_frames += 1;
+                    let units = encoder.encode(&frame, ts)?;
+                    for unit in units {
+                        let base = *first_pts_ns.get_or_insert(unit.timestamp_ns);
+                        let target_ns = unit.timestamp_ns.saturating_sub(base);
+                        let elapsed_ns = playback_start.elapsed().as_nanos() as u64;
+                        if target_ns > elapsed_ns {
+                            thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
+                        }
+                        sender.send_unit(&unit)?;
+                    }
+                    if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
+                        println!("{}", sender.stats_line());
+                    }
+                    next_frame_index += 1;
+                }
+                if total_input_frames >= max_input_frames {
+                    break;
+                }
+            }
+        }
+
+        for unit in encoder.drain()? {
+            sender.send_unit(&unit)?;
+        }
+
+        // Snapshot before the sender's borrow of the socket ends below.
+        let final_stats = sender.stats_line();
+        println!(
+            "streamed_input_frames={} streamed_frames={} streamed_packets={}",
+            total_input_frames, sender.total_frames, sender.total_packets
+        );
+
+        input_running.store(false, Ordering::Relaxed);
+        drop(socket);
+        if let Some(handle) = input_reader {
+            let _ = handle.join();
+        }
+        println!(
+            "input_events_injected={}",
+            input_injected.load(Ordering::Relaxed)
+        );
+        if args.stats_json {
+            println!("{}", final_stats);
+        }
+        println!("stream_complete=true");
+        return Ok(());
     }
 
     let mut frames = collect_frames(&args.input_dir)?;
@@ -373,6 +618,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         frame_sequence: 1,
         total_packets: 0,
         total_frames: 0,
+        write_stall_ms_max: 0.0,
+        stats_json: args.stats_json,
     };
     let mut total_input_frames = 0usize;
     let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
@@ -442,6 +689,9 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             for unit in units {
                 sender.send_unit(&unit)?;
             }
+            if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
+                println!("{}", sender.stats_line());
+            }
             last_streamed = Some(newest);
         }
     } else {
@@ -490,6 +740,9 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                         thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
                     }
                     sender.send_unit(&unit)?;
+                }
+                if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
+                    println!("{}", sender.stats_line());
                 }
                 next_frame_index += 1;
             }

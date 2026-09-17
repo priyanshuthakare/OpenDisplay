@@ -114,6 +114,12 @@ enum Command {
         /// WiFi pairing PIN shown on the tablet. Only used with --transport wifi.
         #[arg(long)]
         pin: Option<String>,
+        /// Allow plaintext WiFi LAN (dev-only, no PIN/TLS). Requires --transport wifi.
+        #[arg(long, default_value_t = false)]
+        insecure_lan: bool,
+        /// Print streaming stats as JSON every 60 frames.
+        #[arg(long, default_value_t = false)]
+        stats_json: bool,
     },
 }
 
@@ -139,7 +145,7 @@ fn main() -> Result<()> {
         }
         Command::Capabilities => {
             println!("codecs=h264,h265,av1");
-            println!("transport=adb-compat,native-usb-bulk,wifi-tls(planned)");
+            println!("transport=adb-compat,native-usb-bulk,wifi-plain(dev-only)");
             println!("capture=virtual-monitor-only");
             println!("input=hid-touch,hid-pen,keyboard,mouse");
         }
@@ -222,6 +228,8 @@ fn main() -> Result<()> {
             transport,
             device_ip,
             pin,
+            insecure_lan,
+            stats_json,
         } => {
             let codec = match codec.to_ascii_lowercase().as_str() {
                 "h264" | "avc" => EncoderCodec::H264,
@@ -247,6 +255,8 @@ fn main() -> Result<()> {
                 transport,
                 device_ip,
                 pin,
+                insecure_lan,
+                stats_json,
             })?;
         }
     }

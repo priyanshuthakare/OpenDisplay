@@ -32,6 +32,7 @@ internal class StreamSession(
     private var serverSocket: ServerSocket? = null
     private var clientSocket: Socket? = null
     private var thread: Thread? = null
+    private val pipeline = StreamPipeline(surface)
 
     // Reverse input channel. `output` is set once a host connects and guarded by
     // `outputLock` because the UI thread writes input while the session thread
@@ -52,6 +53,7 @@ internal class StreamSession(
         serverSocket?.close()
         thread?.join(2000)
         thread = null
+        pipeline.release()
     }
 
     /**
@@ -116,249 +118,14 @@ internal class StreamSession(
     }
 
     private fun handleClient(socket: Socket) {
-        var decoder: FrameDecoder? = null
-        val reassembler = FrameReassembler()
         val input = BufferedInputStream(socket.getInputStream())
         synchronized(outputLock) { output = socket.getOutputStream() }
         try {
-            while (running.get()) {
-                val packetLength = readU32LE(input)
-                val packetBytes = readExactly(input, packetLength)
-                val packet = try {
-                    TransportPacket.decode(packetBytes)
-                } catch (e: TransportDecodeException) {
-                    Log.w(TAG, "Dropping invalid transport packet: ${e.message}")
-                    continue
-                }
-                if (packet.header.kind != PacketKind.FrameFragment) {
-                    continue
-                }
-
-                val frameBytes = reassembler.push(
-                    frameSequence = packet.header.frameSequence,
-                    fragmentIndex = packet.header.fragmentIndex,
-                    fragmentTotal = packet.header.fragmentTotal,
-                    fragmentPayload = packet.payload,
-                ) ?: continue
-
-                val frame = try {
-                    ProtocolFrame.decode(frameBytes)
-                } catch (e: ProtocolDecodeException) {
-                    Log.w(TAG, "Dropping invalid protocol frame: ${e.message}")
-                    continue
-                }
-                if (decoder == null || !decoder.matches(frame)) {
-                    decoder?.close()
-                    decoder = FrameDecoder(surface, frame)
-                }
-                decoder.queue(frame)
-            }
+            pipeline.handleClient(input, socket.getOutputStream())
         } finally {
             synchronized(outputLock) { output = null }
-            decoder?.close()
         }
     }
 }
 
-private data class ProtocolFrame(
-    val sequence: Long,
-    val timestampNs: Long,
-    val codec: Int,
-    val width: Int,
-    val height: Int,
-    val payload: ByteArray,
-) {
-    companion object {
-        fun decode(bytes: ByteArray): ProtocolFrame {
-            if (bytes.size < PROTOCOL_HEADER_LEN) {
-                throw ProtocolDecodeException("frame shorter than protocol header")
-            }
-            for (i in PROTOCOL_MAGIC.indices) {
-                if (bytes[i] != PROTOCOL_MAGIC[i]) {
-                    throw ProtocolDecodeException("invalid protocol magic")
-                }
-            }
 
-            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-            buffer.position(4)
-            val version = buffer.short.toInt() and 0xffff
-            if (version != 1) {
-                throw ProtocolDecodeException("unsupported protocol version $version")
-            }
-            val headerLen = buffer.short.toInt() and 0xffff
-            if (headerLen != PROTOCOL_HEADER_LEN || bytes.size < headerLen) {
-                throw ProtocolDecodeException("invalid protocol header length $headerLen")
-            }
-            val sequence = buffer.long
-            val timestampNs = buffer.long
-            val codec = buffer.get().toInt() and 0xff
-            buffer.get() // flags
-            val width = buffer.short.toInt() and 0xffff
-            val height = buffer.short.toInt() and 0xffff
-            buffer.int // refresh mHz
-            val payloadLen = buffer.int
-            val payloadCrc = buffer.int.toLong() and 0xffffffffL
-            buffer.position(PROTOCOL_HEADER_LEN)
-
-            if (payloadLen < 0 || bytes.size < PROTOCOL_HEADER_LEN + payloadLen) {
-                throw ProtocolDecodeException("invalid payload length $payloadLen")
-            }
-            val payload = ByteArray(payloadLen)
-            buffer.get(payload)
-
-            val crc = CRC32()
-            crc.update(payload)
-            if (crc.value != payloadCrc) {
-                throw ProtocolDecodeException("payload crc mismatch")
-            }
-
-            return ProtocolFrame(
-                sequence = sequence,
-                timestampNs = timestampNs,
-                codec = codec,
-                width = width,
-                height = height,
-                payload = payload,
-            )
-        }
-    }
-}
-
-private class ProtocolDecodeException(message: String) : Exception(message)
-
-private class FrameDecoder(
-    surface: Surface,
-    firstFrame: ProtocolFrame,
-) : AutoCloseable {
-    private val codecType = firstFrame.codec
-    private val width = firstFrame.width
-    private val height = firstFrame.height
-    private val decoder: MediaCodec = MediaCodec.createDecoderByType(mimeType(codecType)).apply {
-        configure(MediaFormat.createVideoFormat(mimeType(codecType), width, height), surface, null, 0)
-        start()
-    }
-    private val bufferInfo = MediaCodec.BufferInfo()
-    private val pacer = FramePacer()
-
-    fun matches(frame: ProtocolFrame): Boolean =
-        frame.codec == codecType && frame.width == width && frame.height == height
-
-    fun queue(frame: ProtocolFrame) {
-        // Backpressure: if no input buffer is free, drain output (which also
-        // presents ready frames) and retry rather than dropping the payload,
-        // which would corrupt the stream — especially for reference frames.
-        // dequeueInputBuffer's 10 ms timeout paces the retries without spinning.
-        var inIndex = decoder.dequeueInputBuffer(10_000)
-        while (inIndex < 0) {
-            drainOutput()
-            inIndex = decoder.dequeueInputBuffer(10_000)
-        }
-
-        val inputBuffer = decoder.getInputBuffer(inIndex) ?: return
-        inputBuffer.clear()
-        inputBuffer.put(frame.payload)
-        decoder.queueInputBuffer(
-            inIndex,
-            0,
-            frame.payload.size,
-            frame.timestampNs / 1_000,
-            0,
-        )
-
-        drainOutput()
-    }
-
-    /**
-     * Release all currently-ready output frames to the surface, scheduling each
-     * for its paced presentation time. Returns true if at least one frame was
-     * released.
-     */
-    private fun drainOutput(): Boolean {
-        var released = false
-        while (true) {
-            val outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
-            if (outIndex < 0) break
-            val ptsNs = bufferInfo.presentationTimeUs * 1_000
-            val presentNs = pacer.deadlineNs(ptsNs, System.nanoTime())
-            decoder.releaseOutputBuffer(outIndex, presentNs)
-            released = true
-        }
-        return released
-    }
-
-    override fun close() {
-        try {
-            decoder.stop()
-        } catch (_: Exception) {
-        }
-        decoder.release()
-    }
-
-    private fun mimeType(codec: Int): String = when (codec) {
-        1 -> MediaFormat.MIMETYPE_VIDEO_AVC
-        2 -> MediaFormat.MIMETYPE_VIDEO_HEVC
-        else -> throw IllegalArgumentException("unsupported codec id $codec")
-    }
-}
-
-private class FrameReassembler {
-    private data class State(
-        var total: Int = 0,
-        val fragments: MutableMap<Int, ByteArray> = mutableMapOf(),
-    )
-
-    private val pending = linkedMapOf<Long, State>()
-
-    fun push(
-        frameSequence: Long,
-        fragmentIndex: Int,
-        fragmentTotal: Int,
-        fragmentPayload: ByteArray,
-    ): ByteArray? {
-        if (fragmentTotal <= 0 || fragmentIndex < 0 || fragmentIndex >= fragmentTotal) {
-            return null
-        }
-        val state = pending.getOrPut(frameSequence) { State(total = fragmentTotal) }
-        state.total = fragmentTotal
-        state.fragments.putIfAbsent(fragmentIndex, fragmentPayload)
-        if (state.fragments.size != state.total) {
-            trimPending()
-            return null
-        }
-
-        val output = ByteArray(state.fragments.values.sumOf { it.size })
-        var offset = 0
-        for (index in 0 until state.total) {
-            val chunk = state.fragments[index] ?: return null
-            System.arraycopy(chunk, 0, output, offset, chunk.size)
-            offset += chunk.size
-        }
-        pending.remove(frameSequence)
-        trimPending()
-        return output
-    }
-
-    private fun trimPending() {
-        while (pending.size > 16) {
-            val oldest = pending.keys.firstOrNull() ?: return
-            pending.remove(oldest)
-        }
-    }
-}
-
-private fun readExactly(input: BufferedInputStream, length: Int): ByteArray {
-    if (length <= 0) throw EOFException("invalid packet length $length")
-    val bytes = ByteArray(length)
-    var read = 0
-    while (read < length) {
-        val n = input.read(bytes, read, length - read)
-        if (n < 0) throw EOFException("unexpected EOF")
-        read += n
-    }
-    return bytes
-}
-
-private fun readU32LE(input: BufferedInputStream): Int {
-    val bytes = readExactly(input, 4)
-    return ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).int
-}

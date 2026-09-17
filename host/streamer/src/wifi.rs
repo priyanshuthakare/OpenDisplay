@@ -1,11 +1,11 @@
-//! WiFi transport scaffolding (PR-1: not yet connected).
+//! WiFi transport implementation.
 //!
-//! PR-2 will implement the plaintext LAN path, PR-3 adds PIN + TLS.
-//! This module intentionally contains only the argument shape and QR
-//! payload parsing so the `--transport wifi` flag can be plumbed
-//! without changing USB behavior.
+//! PR-2 implements plaintext LAN (gated behind --insecure-lan).
+//! PR-3 adds PIN + TLS 1.3.
 
-use anyhow::{bail, Result};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::Duration;
+use anyhow::{bail, Context, Result};
 
 /// Default TCP port the Android app will listen on for WiFi (LAN).
 /// USB keeps 27183 (adb-forwarded loopback); WiFi uses 27184 so both
@@ -95,14 +95,31 @@ fn extract_json_u16(s: &str, key: &str) -> Option<u16> {
     digits.parse().ok()
 }
 
-/// PR-2 entry point: connect to the tablet over LAN.
-/// Currently always errors so `--transport wifi` fails loudly instead of
-/// silently falling back to USB.
+/// PR-2 entry point: connect to the tablet over LAN (plaintext).
+/// Returns a TcpStream for the video socket.
+pub fn connect_plain(device: &WifiDevice) -> Result<TcpStream> {
+    let addr = resolve_addr(&device.addr())?;
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .with_context(|| format!("connecting to wifi device {}", device.addr()))?;
+    stream.set_nodelay(true)
+        .context("failed to set TCP_NODELAY")?;
+    Ok(stream)
+}
+
+/// PR-3 entry point: connect to the tablet over LAN with TLS.
+/// This will be implemented in PR-3.
 pub fn connect(_device: &WifiDevice, _pin: Option<&str>) -> Result<()> {
     bail!(
         "wifi transport not yet implemented (PR-2 plaintext LAN, PR-3 PIN+TLS). \
          Use --transport usb for now."
     )
+}
+
+fn resolve_addr(addr: &str) -> Result<SocketAddr> {
+    addr.to_socket_addrs()
+        .with_context(|| format!("resolving wifi device address '{}'", addr))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no address resolved for '{}'", addr))
 }
 
 #[cfg(test)]
@@ -135,5 +152,14 @@ mod tests {
     #[test]
     fn rejects_empty_address() {
         assert!(parse_device("  ").is_err());
+    }
+
+    #[test]
+    fn connect_plain_resolves_and_connects() {
+        let device = parse_device("127.0.0.1:27184").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:27184").unwrap();
+        let stream = connect_plain(&device).unwrap();
+        assert_eq!(stream.peer_addr().unwrap().port(), 27184);
+        assert!(listener.accept().is_ok());
     }
 }

@@ -1,16 +1,21 @@
 package org.usbdisplay.client
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.FrameLayout
+import org.usbdisplay.client.pair.WifiPairActivity
 import org.usbdisplay.client.transport.InputAction
 import org.usbdisplay.client.transport.InputEvent
 import org.usbdisplay.client.transport.KeyAction
@@ -20,20 +25,41 @@ import org.usbdisplay.client.transport.PointerButton
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private var streamSession: StreamSession? = null
+    private var streamPipeline: StreamPipeline? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        val layout = FrameLayout(this)
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
-        setContentView(surfaceView)
+        layout.addView(surfaceView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        val pairButton = Button(this).apply {
+            text = "WiFi Pair"
+            alpha = 0.6f
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, WifiPairActivity::class.java))
+            }
+        }
+        val pairParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        pairParams.setMargins(16, 16, 16, 16)
+        layout.addView(pairButton, pairParams)
+
+        setContentView(layout)
         hideSystemBars()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val session = streamSession ?: return super.onTouchEvent(event)
+        val pipeline = streamPipeline ?: return super.onTouchEvent(event)
         val width = surfaceView.width
         val height = surfaceView.height
         if (width <= 0 || height <= 0) return super.onTouchEvent(event)
@@ -50,12 +76,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // them in order so fast drags stay smooth on the host cursor.
         if (action == InputAction.Move) {
             for (h in 0 until event.historySize) {
-                session.sendInput(
+                pipeline.sendInput(
                     pointerEvent(action, event.getHistoricalX(h), event.getHistoricalY(h), width, height)
                 )
             }
         }
-        session.sendInput(pointerEvent(action, event.x, event.y, width, height))
+        pipeline.sendInput(pointerEvent(action, event.x, event.y, width, height))
         return true
     }
 
@@ -86,15 +112,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * (e.g. Back to leave the activity).
      */
     private fun sendKey(action: KeyAction, keyCode: Int, event: KeyEvent): Boolean {
-        val session = streamSession ?: return false
+        val pipeline = streamPipeline ?: return false
         val named = namedKeyFor(keyCode)
         if (named != null) {
-            session.sendInput(InputEvent.keyNamed(action, named))
+            pipeline.sendInput(InputEvent.keyNamed(action, named))
             return true
         }
         val unicode = event.unicodeChar
         if (unicode != 0) {
-            session.sendInput(InputEvent.keyChar(action, unicode))
+            pipeline.sendInput(InputEvent.keyChar(action, unicode))
             return true
         }
         return false
@@ -134,6 +160,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceCreated(holder: SurfaceHolder) {
         streamSession?.stop()
         streamSession = StreamSession(holder.surface).also { it.start() }
+        streamPipeline?.release()
+        streamPipeline = StreamPipeline(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -147,6 +175,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onDestroy() {
         streamSession?.stop()
         streamSession = null
+        streamPipeline?.release()
+        streamPipeline = null
         super.onDestroy()
     }
 }
