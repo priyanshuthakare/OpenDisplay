@@ -253,6 +253,31 @@ Expected result:
 - The tablet displays decoded frames from the captured virtual-monitor stream.
 - Transport uses USB (`adb` over cable), not Wi‑Fi.
 
+### 7b. Stream over WiFi LAN (TLS + PIN)
+
+USB stays the default. WiFi is an alternative on the same LAN (see
+[docs/wifi.md](docs/wifi.md)):
+
+1. Open the Android app → **WiFi Pair**. Note the LAN IP, 6-digit PIN, and QR.
+2. On the host (same LAN, non-isolated SSID):
+
+```powershell
+cargo run -p usbdisplay-streamer -- stream-capture `
+    --transport wifi --device-ip 192.168.1.42 --pin 123456 `
+    --input-dir "$env:ProgramData\USBDisplay\capture" --loop
+```
+
+`--device-ip` accepts a bare IP, `ip:port`, or the full QR JSON
+`{"v":1,"ip":"…","port":27184,"fp":"SHA256:…"}`. WiFi uses port **27184**
+(USB keeps **27183**), TLS 1.3 only, no plaintext fallback. Second connects
+from the same PC skip PIN (trusted `host_id`); wrong PIN → 3 strikes then
+30 s lockout; AP-isolated networks print `host unreachable … use USB`.
+
+WiFi defaults to 12 Mbps / GOP 30 with adaptive bitrate (20→12→8→4 Mbps);
+`--stats-json` prints
+`{"streamed_frames":…,"streamed_packets":…,"write_stall_ms_max":…,"input_events_injected":…}`
+every 60 frames.
+
 ### 8. What You Can Do Today
 
 Today, you can:
@@ -291,6 +316,5 @@ GitHub Actions runs on every push and pull request:
 
 - No cloud dependency
 - No telemetry
-- No Wi-Fi transport
 - No whole-desktop capture
 - No software decoding on Android
