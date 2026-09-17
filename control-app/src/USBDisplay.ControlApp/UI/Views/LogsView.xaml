@@ -1,0 +1,17 @@
+<UserControl x:Class="USBDisplay.ControlApp.UI.Views.LogsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Border Style="{StaticResource CardBorder}">
+    <DockPanel>
+      <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+        <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding LevelFilter, Mode=TwoWay}" Width="110" Margin="0,0,8,0"/>
+        <TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Width="220" Margin="0,0,8,0"/>
+        <Button Content="{Binding PauseLabel}" Command="{Binding Pause}"/>
+        <Button Content="Clear" Command="{Binding Clear}"/>
+        <Button Content="Copy" Command="{Binding Copy}"/>
+        <Button Content="Export logs" Command="{Binding Export}"/>
+      </StackPanel>
+      <ListBox ItemsSource="{Binding Visible}" FontFamily="Consolas" FontSize="12" MinHeight="380"/>
+    </DockPanel>
+  </Border>
+</UserControl>

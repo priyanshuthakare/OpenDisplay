@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Version>0.3.0</Version>
+    <Authors>USBDisplay Contributors</Authors>
+    <Product>USBDisplay Control Center</Product>
+    <Description>Orchestration, monitoring, configuration, and diagnostics for the USBDisplay Windows-to-Android secondary display stack.</Description>
+    <Copyright>USBDisplay Contributors (Apache-2.0 OR MIT)</Copyright>
+  </PropertyGroup>
+
+  <!-- WinForms is referenced only for NotifyIcon/Screen; drop its implicit
+       global using so WPF names (Application, UserControl, MessageBox) win. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>USBDisplay.ControlApp.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

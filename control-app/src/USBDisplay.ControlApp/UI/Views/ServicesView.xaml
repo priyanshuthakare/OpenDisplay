@@ -1,0 +1,47 @@
+<UserControl x:Class="USBDisplay.ControlApp.UI.Views.ServicesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StackPanel>
+    <Border Style="{StaticResource CardBorder}">
+      <StackPanel>
+        <TextBlock Text="SERVICES &amp; PROCESSES" FontSize="18" FontWeight="Bold"/>
+        <TextBlock Text="{Binding Explainer}" Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,4,0,8"/>
+        <ListBox ItemsSource="{Binding ServiceEntries}" MinHeight="110">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Margin="0,4">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="{Binding Name}" FontWeight="Bold" Width="260"/>
+                  <TextBlock Text="{Binding Status}" Foreground="{StaticResource Accent}"/>
+                </StackPanel>
+                <TextBlock Text="{Binding Description}" Foreground="{StaticResource Dim}" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding LastError}" Foreground="{StaticResource Err}" TextWrapping="Wrap"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </StackPanel>
+    </Border>
+    <Border Style="{StaticResource CardBorder}">
+      <StackPanel>
+        <TextBlock Text="MANAGED PROCESSES" FontSize="14" FontWeight="Bold"/>
+        <ListBox ItemsSource="{Binding Processes}" MinHeight="90">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding Component}" FontWeight="Bold" Width="120"/>
+                <TextBlock Text="PID " Foreground="{StaticResource Dim}"/>
+                <TextBlock Text="{Binding Pid}" FontFamily="Consolas" Width="80"/>
+                <TextBlock Text="CPU " Foreground="{StaticResource Dim}"/>
+                <TextBlock Text="{Binding CpuPercent}" FontFamily="Consolas" Width="70"/>
+                <TextBlock Text=" MEM " Foreground="{StaticResource Dim}"/>
+                <TextBlock Text="{Binding WorkingSetBytes}" FontFamily="Consolas"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <Button Content="Restart Streamer" Command="{Binding RestartStreamer}" HorizontalAlignment="Left" Margin="0,10,0,0"/>
+      </StackPanel>
+    </Border>
+  </StackPanel>
+</UserControl>

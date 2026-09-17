@@ -1,0 +1,31 @@
+<UserControl x:Class="USBDisplay.ControlApp.UI.Views.DeviceView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StackPanel>
+    <Border Style="{StaticResource CardBorder}">
+      <StackPanel>
+        <TextBlock Text="ANDROID DEVICE" FontSize="18" FontWeight="Bold"/>
+        <TextBlock Text="{Binding Note}" TextWrapping="Wrap" Foreground="{StaticResource Dim}" Margin="0,4,0,8"/>
+        <ListBox ItemsSource="{Binding Devices}" MinHeight="100">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel>
+                <TextBlock Text="{Binding Serial}" FontFamily="Consolas" FontWeight="Bold"/>
+                <TextBlock Foreground="{StaticResource Dim}">
+                  <Run Text="State: "/><Run Text="{Binding State}"/>
+                  <Run Text="   Model: "/><Run Text="{Binding Model, FallbackValue='—'}"/>
+                  <Run Text="   Transport: "/><Run Text="{Binding TransportId, FallbackValue='—'}"/>
+                </TextBlock>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+          <Button Content="Refresh devices" Command="{Binding RefreshDevices}"/>
+          <Button Content="Reconnect" Command="{Binding Reconnect}"/>
+          <Button Content="Restart ADB server" Command="{Binding RestartServer}"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+  </StackPanel>
+</UserControl>

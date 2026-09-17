@@ -22,6 +22,7 @@ host/
   streamer/            Rust host service and diagnostics entry point
 protocol/              Shared binary frame protocol
 android/               Kotlin Android client
+control-app/           Windows Control Center GUI (dashboard, orchestration, diagnostics)
 common/                Cross-component contracts and shared notes
 tools/                 Developer tools
 docs/                  Architecture and design documentation
@@ -277,6 +278,21 @@ WiFi defaults to 12 Mbps / GOP 30 with adaptive bitrate (20→12→8→4 Mbps);
 `--stats-json` prints
 `{"streamed_frames":…,"streamed_packets":…,"write_stall_ms_max":…,"input_events_injected":…}`
 every 60 frames.
+
+### 7c. Control Center (Windows GUI, optional)
+
+Instead of terminals, the native Control Center app (`control-app/`, .NET 8
+WPF) provides a dashboard, driver management, device/services monitoring,
+live stream telemetry, logs, one-click diagnostics, and guided start/stop
+orchestration around the same CLI components above:
+
+```powershell
+cd control-app
+dotnet run --project src/USBDisplay.ControlApp -- --demo   # simulated stack, no hardware needed
+```
+
+See [docs/control-app.md](docs/control-app.md) for the integration map and
+`control-app/README.md` for build/packaging.
 
 ### 8. What You Can Do Today
 
