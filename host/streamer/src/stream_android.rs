@@ -4,10 +4,9 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use rustls::StreamOwned;
 
 use anyhow::{bail, Context, Result};
 use usbdisplay_encoder::{read_bgra_bmp, select_encoder, Codec, EncoderConfig};
@@ -24,10 +23,70 @@ use rustls::ClientConnection;
 /// How many streamed frames pass between `--stats-json` lines.
 const STATS_FRAME_INTERVAL: usize = 60;
 
+/// Default bitrate/GOP when the user did not override flags.
+/// USB keeps 20 Mbps / GOP 60; WiFi defaults to 12 Mbps / GOP 30.
+pub const USB_DEFAULT_BITRATE_BPS: u32 = 20_000_000;
+pub const WIFI_DEFAULT_BITRATE_BPS: u32 = 12_000_000;
+const USB_DEFAULT_GOP: u32 = 60;
+const WIFI_DEFAULT_GOP: u32 = 30;
+
+/// Shared TLS stream: `rustls::StreamOwned` cannot be `try_clone`d like a
+/// raw `TcpStream`, so both the video writer and the reverse input reader
+/// share one connection behind a mutex. Each `Read`/`Write` call locks
+/// briefly; throughput is dominated by the socket, not the lock.
+#[derive(Clone)]
+pub struct SharedTlsStream {
+    inner: Arc<Mutex<rustls::StreamOwned<ClientConnection, TcpStream>>>,
+}
+
+impl SharedTlsStream {
+    pub fn new(stream: rustls::StreamOwned<ClientConnection, TcpStream>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(stream)),
+        }
+    }
+}
+
+impl Write for SharedTlsStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // `StreamOwned::write` takes `&mut self`; lock per call.
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("tls lock poisoned"))?;
+        std::io::Write::write(&mut *guard, buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("tls lock poisoned"))?;
+        std::io::Write::flush(&mut *guard)
+    }
+}
+
+impl Read for SharedTlsStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("tls lock poisoned"))?;
+        std::io::Read::read(&mut *guard, buf)
+    }
+}
+
 /// Wrapper for either plain TCP or TLS stream for generic use.
 pub enum VideoStream {
     Plain(TcpStream),
-    Tls(StreamOwned<ClientConnection, TcpStream>),
+    Tls(SharedTlsStream),
+}
+
+impl Clone for VideoStream {
+    fn clone(&self) -> Self {
+        self.try_clone()
+            .expect("VideoStream clone must succeed (TLS shares Arc, TCP try_clone)")
+    }
 }
 
 impl Write for VideoStream {
@@ -59,17 +118,21 @@ impl VideoStream {
     fn try_clone(&self) -> std::io::Result<Self> {
         match self {
             VideoStream::Plain(s) => Ok(VideoStream::Plain(s.try_clone()?)),
-            VideoStream::Tls(_) => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "TLS stream cannot be cloned",
-            )),
+            // TLS shares one session; cloning shares the Arc.
+            VideoStream::Tls(s) => Ok(VideoStream::Tls(s.clone())),
         }
     }
 
-    fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
+    fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
         match self {
-            VideoStream::Plain(s) => s.set_nodelay(nodelay),
-            VideoStream::Tls(s) => s.get_ref().set_nodelay(nodelay),
+            VideoStream::Plain(s) => s.set_read_timeout(dur),
+            VideoStream::Tls(s) => {
+                let guard = s
+                    .inner
+                    .lock()
+                    .map_err(|_| std::io::Error::other("tls lock poisoned"))?;
+                guard.get_ref().set_read_timeout(dur)
+            }
         }
     }
 
@@ -79,7 +142,9 @@ impl VideoStream {
                 let _ = s.shutdown(std::net::Shutdown::Both);
             }
             VideoStream::Tls(s) => {
-                let _ = s.get_ref().shutdown(std::net::Shutdown::Both);
+                if let Ok(guard) = s.inner.lock() {
+                    let _ = guard.get_ref().shutdown(std::net::Shutdown::Both);
+                }
             }
         }
     }
@@ -101,16 +166,12 @@ pub struct StreamCaptureArgs {
     /// usable as a real second monitor. When false, every captured frame is
     /// replayed in order at a fixed fps (demo / file-replay behavior).
     pub live: bool,
-    /// Selected transport. USB is the current ADB-forwarded path; WiFi is a
-    /// PR-1 stub that fails loudly until the LAN path lands.
+    /// Selected transport. USB is the ADB-forwarded path; WiFi is TLS LAN.
     pub transport: Transport,
     /// WiFi tablet address (bare IP, ip:port, or QR JSON). WiFi only.
     pub device_ip: Option<String>,
     /// WiFi pairing PIN shown on the tablet. WiFi only.
     pub pin: Option<String>,
-    /// Allow plaintext WiFi LAN (dev-only, no PIN/TLS). Requires --transport wifi.
-    /// DEPRECATED in PR-3: removed, TLS required.
-    pub insecure_lan: bool,
     /// Print streaming stats as JSON every 60 frames.
     pub stats_json: bool,
 }
@@ -201,11 +262,202 @@ fn ensure_adb_forward(serial: &str, port: u16) -> Result<AdbForwardGuard> {
     })
 }
 
+/// Adaptive bitrate ladder (bps). WiFi starts one step down from USB.
+const BITRATE_LADDER: [u32; 4] = [20_000_000, 12_000_000, 8_000_000, 4_000_000];
+
+/// Congestion-adaptive bitrate controller (PR-4).
+///
+/// Inputs: per-send write-stall time + KeyframeRequest rate from the input
+/// thread. Steps down 20→12→8→4 Mbps when p95 write-stall >50 ms over a
+/// 60-frame window OR kf_req_rate >2/s; steps back up when clean for
+/// 600 frames.
+pub struct RateController {
+    level: usize,
+    stalls: Vec<f64>,
+    /// Monotonic KF counter sampled per frame; `kf_window[i]` aligns with
+    /// `stalls[i]` so `kf_total - kf_window[0]` is the exact count in the
+    /// current 60-frame window (≈ per-second at 60 fps).
+    kf_window: Vec<u64>,
+    clean_frames: usize,
+}
+
+impl RateController {
+    pub fn new(start_bitrate: u32) -> Self {
+        Self {
+            level: level_for_bitrate(start_bitrate),
+            stalls: Vec::with_capacity(60),
+            kf_window: Vec::with_capacity(60),
+            clean_frames: 0,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn current_bitrate(&self) -> u32 {
+        BITRATE_LADDER[self.level]
+    }
+
+    /// Observe one streamed frame. Returns `Some(new_bitrate)` when the
+    /// encoder should be re-created at a different bitrate.
+    ///
+    /// Congestion = p95 write-stall >50 ms over a 60-frame window OR more
+    /// than 2 keyframe requests in the current window (≈>2/s at 60 fps).
+    /// Recovery requires 600 consecutive clean frames.
+    pub fn observe(&mut self, stall_ms: f64, kf_total: u64) -> Option<u32> {
+        self.stalls.push(stall_ms);
+        self.kf_window.push(kf_total);
+        if self.stalls.len() > 60 {
+            self.stalls.remove(0);
+            self.kf_window.remove(0);
+        }
+        let p95 = percentile(&self.stalls, 95.0);
+        let kf_in_window = kf_total.saturating_sub(*self.kf_window.first().unwrap_or(&kf_total));
+
+        let window_full = self.stalls.len() >= 60;
+        // Stall needs a full window; KF bursts react immediately (>2 in
+        // whatever frames we have so far) so loss storms cut bitrate fast.
+        let stall_congested = window_full && p95 > 50.0;
+        let kf_congested = kf_in_window > 2;
+
+        if stall_congested || kf_congested {
+            self.clean_frames = 0;
+            if self.level + 1 < BITRATE_LADDER.len() {
+                self.level += 1;
+                self.stalls.clear();
+                self.kf_window.clear();
+                return Some(BITRATE_LADDER[self.level]);
+            }
+            return None;
+        }
+
+        if p95 <= 50.0 && !kf_congested {
+            self.clean_frames += 1;
+        } else {
+            self.clean_frames = 0;
+        }
+        if self.clean_frames >= 600 && self.level > 0 && window_full {
+            self.level -= 1;
+            self.clean_frames = 0;
+            self.stalls.clear();
+            self.kf_window.clear();
+            return Some(BITRATE_LADDER[self.level]);
+        }
+        None
+    }
+}
+
+fn level_for_bitrate(bitrate: u32) -> usize {
+    let mut best = 0;
+    let mut best_diff = u32::MAX;
+    for (i, level) in BITRATE_LADDER.iter().enumerate() {
+        let diff = level.abs_diff(bitrate);
+        if diff < best_diff {
+            best_diff = diff;
+            best = i;
+        }
+    }
+    best
+}
+
+fn percentile(samples: &[f64], p: f64) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = (((p / 100.0) * sorted.len() as f64).ceil() as usize).saturating_sub(1);
+    sorted[idx.min(sorted.len() - 1)]
+}
+
+/// Resolve effective bitrate/GOP: WiFi defaults (12 Mbps / GOP 30) apply
+/// unless the user overrode the flag (detected by comparing to the USB
+/// defaults, per spec).
+pub fn effective_wifi_tuning(transport: Transport, bitrate_bps: u32, gop: u32) -> (u32, u32) {
+    if transport == Transport::Wifi {
+        let bitrate = if bitrate_bps == USB_DEFAULT_BITRATE_BPS {
+            WIFI_DEFAULT_BITRATE_BPS
+        } else {
+            bitrate_bps
+        };
+        let gop = if gop == USB_DEFAULT_GOP {
+            WIFI_DEFAULT_GOP
+        } else {
+            gop
+        };
+        (bitrate, gop)
+    } else {
+        (bitrate_bps, gop)
+    }
+}
+
+/// Re-create the encoder at a new bitrate (same codec/resolution/fps/GOP).
+/// Encoders are fixed-size today, so bitrate changes require re-init;
+/// resolution changes keep the existing bail-and-restart behavior.
+fn recreate_encoder(
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate_bps: u32,
+    gop: u32,
+    codec: Codec,
+) -> Result<Box<dyn usbdisplay_encoder::VideoEncoder>> {
+    let config = EncoderConfig::new(width, height)
+        .with_fps(fps)
+        .with_bitrate(bitrate_bps)
+        .with_gop(gop)
+        .with_codec(codec);
+    let (encoder, _) = select_encoder(&config);
+    encoder.ok_or_else(|| anyhow::anyhow!("no encoder backend available for bitrate {bitrate_bps}"))
+}
+
+fn emit_stats_json(sender: &FrameSender<&mut VideoStream>, injected: &Arc<AtomicU64>) {
+    println!("{}", sender.stats_line(injected.load(Ordering::Relaxed)));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_adapt(
+    rate: &mut RateController,
+    stall_ms: f64,
+    kf_total: u64,
+    current_bitrate: &mut u32,
+    width: u32,
+    height: u32,
+    fps: u32,
+    gop: u32,
+    codec: Codec,
+    encoder: &mut Box<dyn usbdisplay_encoder::VideoEncoder>,
+) {
+    if let Some(new_bitrate) = rate.observe(stall_ms, kf_total) {
+        let old = *current_bitrate;
+        match recreate_encoder(width, height, fps, new_bitrate, gop, codec) {
+            Ok(new_enc) => {
+                *encoder = new_enc;
+                *current_bitrate = new_bitrate;
+                if new_bitrate < old {
+                    println!("bitrate_step_down old_bitrate={old} new_bitrate={new_bitrate}");
+                } else {
+                    println!("bitrate_step_up old_bitrate={old} new_bitrate={new_bitrate}");
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: encoder re-init to {new_bitrate} failed: {e:#}");
+            }
+        }
+    }
+}
+
 /// Reads length-prefixed transport packets from the device and injects any
 /// `Control` input events into the host. Runs until the socket closes or
 /// `running` is cleared. Errors are terminal for the reader only; the video
 /// path keeps streaming.
-fn run_input_reader(mut socket: VideoStream, running: Arc<AtomicBool>, injected: Arc<AtomicU64>) {
+///
+/// Also counts `KeyframeRequest` packets into `kf_requests` for the PR-4
+/// `RateController`.
+fn run_input_reader(
+    mut socket: VideoStream,
+    running: Arc<AtomicBool>,
+    injected: Arc<AtomicU64>,
+    kf_requests: Arc<AtomicU64>,
+) {
     let mut sink = input_inject::default_sink();
     // A short read timeout lets the loop notice `running` being cleared even
     // when the device is idle and no bytes are arriving.
@@ -231,15 +483,19 @@ fn run_input_reader(mut socket: VideoStream, running: Arc<AtomicBool>, injected:
             Ok(packet) => packet,
             Err(_) => continue, // drop malformed packet, keep listening.
         };
-        let control = match packet.into_received() {
-            Ok(ReceivedPacket::Control(payload)) => payload,
-            _ => continue, // only Control packets carry input today.
-        };
-        for chunk in control.chunks_exact(usbdisplay_protocol::INPUT_EVENT_LEN) {
-            if let Ok(event) = InputEvent::decode(chunk) {
-                sink.inject(&event);
-                injected.fetch_add(1, Ordering::Relaxed);
+        match packet.into_received() {
+            Ok(ReceivedPacket::Control(payload)) => {
+                for chunk in payload.chunks_exact(usbdisplay_protocol::INPUT_EVENT_LEN) {
+                    if let Ok(event) = InputEvent::decode(chunk) {
+                        sink.inject(&event);
+                        injected.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             }
+            Ok(ReceivedPacket::KeyframeRequest { .. }) => {
+                kf_requests.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => continue,
         }
     }
     running.store(false, Ordering::Relaxed);
@@ -307,7 +563,7 @@ struct FrameSender<W: Write> {
     total_packets: usize,
     total_frames: usize,
     write_stall_ms_max: f64,
-    stats_json: bool,
+    last_stall_ms: f64,
 }
 
 impl<W: Write> FrameSender<W> {
@@ -336,14 +592,19 @@ impl<W: Write> FrameSender<W> {
         }
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         self.write_stall_ms_max = self.write_stall_ms_max.max(elapsed_ms);
+        self.last_stall_ms = elapsed_ms;
         self.total_frames += 1;
         Ok(())
     }
 
-    fn stats_line(&self) -> String {
+    fn last_stall_ms(&self) -> f64 {
+        self.last_stall_ms
+    }
+
+    fn stats_line(&self, input_events_injected: u64) -> String {
         format!(
-            r#"{{"streamed_frames":{},"streamed_packets":{},"write_stall_ms_max":{:.2}}}"#,
-            self.total_frames, self.total_packets, self.write_stall_ms_max
+            r#"{{"streamed_frames":{},"streamed_packets":{},"write_stall_ms_max":{:.2},"input_events_injected":{}}}"#,
+            self.total_frames, self.total_packets, self.write_stall_ms_max, input_events_injected
         )
     }
 }
@@ -359,14 +620,14 @@ pub fn write_framed_packet<W: Write>(socket: &mut W, packet: &TransportPacket) -
 }
 
 pub fn run(args: StreamCaptureArgs) -> Result<()> {
-    // WiFi is a PR-1 stub: fail fast with actionable guidance before touching
-    // the encoder or ADB so `--transport wifi` never silently falls back.
+    // WiFi: fail fast with actionable guidance before touching the encoder
+    // or ADB so `--transport wifi` never silently falls back to USB.
     if args.transport == Transport::Wifi {
         let raw = args.device_ip.as_deref().unwrap_or_default();
         if raw.trim().is_empty() {
             bail!(
                 "wifi transport needs --device-ip <ip|ip:port|QR-JSON> \
-                 (tablet WiFi Pair screen shows the QR; plaintext LAN lands in PR-2, PIN+TLS in PR-3)"
+                 (tablet WiFi Pair screen shows the QR; scan it or pass --device-ip <tablet-lan-ip>)"
             );
         }
         let device = wifi::parse_device(raw)?;
@@ -375,36 +636,31 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             println!("wifi_fingerprint={fp}");
         }
 
-        // PR-3: Remove --insecure-lan flag, TLS required
-        if args.insecure_lan {
-            bail!(
-                "--insecure-lan flag removed in PR-3; use --pin for encrypted TLS connection"
-            );
-        }
-
-        // Connect via TLS with PIN
+        // PR-3+: plaintext refused always; PIN+TLS 1.3 required.
         let pin = args.pin.as_deref();
         if pin.is_none() {
-            bail!("WiFi requires --pin <6-digit-code> shown on tablet");
+            bail!("WiFi requires --pin <code> shown on the tablet pair screen");
         }
         println!("wifi_encryption=tls-1.3");
 
         let connection = wifi::connect_tls(&device, pin)?;
         println!("android_connection=established");
 
-        // Wrap TLS stream for video streaming
-        let video_stream = VideoStream::Tls(connection.stream);
+        // Wrap TLS stream for video streaming (shared for write + input read).
+        let mut video_stream = VideoStream::Tls(SharedTlsStream::new(connection.stream));
 
-        // Spawn the reverse input channel on a clone of the socket
+        // Spawn the reverse input channel on a clone of the socket.
         let input_running = Arc::new(AtomicBool::new(true));
         let input_injected = Arc::new(AtomicU64::new(0));
+        let kf_requests = Arc::new(AtomicU64::new(0));
         let input_reader = match video_stream.try_clone() {
             Ok(reader_socket) => {
                 let running = Arc::clone(&input_running);
                 let injected = Arc::clone(&input_injected);
+                let kf = Arc::clone(&kf_requests);
                 println!("input_return_channel=enabled");
                 Some(thread::spawn(move || {
-                    run_input_reader(reader_socket, running, injected)
+                    run_input_reader(reader_socket, running, injected, kf)
                 }))
             }
             Err(err) => {
@@ -431,10 +687,17 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             .with_context(|| format!("decoding {}", frames[0].display()))?;
         println!("stream_frame_size={}x{}", first.width, first.height);
 
+        let (eff_bitrate, eff_gop) =
+            effective_wifi_tuning(args.transport, args.bitrate_bps, args.gop);
+        if eff_bitrate != args.bitrate_bps || eff_gop != args.gop {
+            println!("wifi_defaults_applied bitrate={eff_bitrate} gop={eff_gop}");
+        }
+        let mut current_bitrate = eff_bitrate;
+        let current_gop = eff_gop;
         let config = EncoderConfig::new(first.width, first.height)
             .with_fps(args.fps)
-            .with_bitrate(args.bitrate_bps)
-            .with_gop(args.gop)
+            .with_bitrate(current_bitrate)
+            .with_gop(current_gop)
             .with_codec(args.codec);
 
         let (encoder, statuses) = select_encoder(&config);
@@ -450,6 +713,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             None => bail!("no encoder backend available (see backend lines above)"),
         };
         println!("stream_encoder_backend={}", encoder.backend_name());
+        println!("stream_bitrate={current_bitrate} stream_gop={current_gop}");
+        let mut rate = RateController::new(current_bitrate);
 
         let mut sender = FrameSender {
             socket: &mut video_stream,
@@ -462,7 +727,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             total_packets: 0,
             total_frames: 0,
             write_stall_ms_max: 0.0,
-            stats_json: args.stats_json,
+            last_stall_ms: 0.0,
         };
         let mut total_input_frames = 0usize;
         let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
@@ -520,9 +785,21 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                 let units = encoder.encode(&frame, ts)?;
                 for unit in units {
                     sender.send_unit(&unit)?;
+                    maybe_adapt(
+                        &mut rate,
+                        sender.last_stall_ms(),
+                        kf_requests.load(Ordering::Relaxed),
+                        &mut current_bitrate,
+                        first.width,
+                        first.height,
+                        args.fps,
+                        current_gop,
+                        args.codec,
+                        &mut encoder,
+                    );
                 }
                 if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
-                    println!("{}", sender.stats_line());
+                    emit_stats_json(&sender, &input_injected);
                 }
                 last_streamed = Some(newest);
             }
@@ -571,9 +848,21 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                             thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
                         }
                         sender.send_unit(&unit)?;
+                        maybe_adapt(
+                            &mut rate,
+                            sender.last_stall_ms(),
+                            kf_requests.load(Ordering::Relaxed),
+                            &mut current_bitrate,
+                            first.width,
+                            first.height,
+                            args.fps,
+                            current_gop,
+                            args.codec,
+                            &mut encoder,
+                        );
                     }
                     if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
-                        println!("{}", sender.stats_line());
+                        emit_stats_json(&sender, &input_injected);
                     }
                     next_frame_index += 1;
                 }
@@ -588,7 +877,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         }
 
         // Snapshot before the sender's borrow of the socket ends below.
-        let final_stats = sender.stats_line();
+        let final_stats = sender.stats_line(input_injected.load(Ordering::Relaxed));
         println!(
             "streamed_input_frames={} streamed_frames={} streamed_packets={}",
             total_input_frames, sender.total_frames, sender.total_packets
@@ -664,13 +953,15 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     // below keeps ownership of `socket` for writes.
     let input_running = Arc::new(AtomicBool::new(true));
     let input_injected = Arc::new(AtomicU64::new(0));
+    let kf_requests = Arc::new(AtomicU64::new(0));
     let input_reader = match video_stream.try_clone() {
         Ok(reader_socket) => {
             let running = Arc::clone(&input_running);
             let injected = Arc::clone(&input_injected);
+            let kf = Arc::clone(&kf_requests);
             println!("input_return_channel=enabled");
             Some(thread::spawn(move || {
-                run_input_reader(reader_socket, running, injected)
+                run_input_reader(reader_socket, running, injected, kf)
             }))
         }
         Err(err) => {
@@ -678,6 +969,14 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             None
         }
     };
+
+    // USB keeps user bitrate/GOP verbatim; effective helper is identity here.
+    let (eff_bitrate, eff_gop) = effective_wifi_tuning(args.transport, args.bitrate_bps, args.gop);
+    let mut current_bitrate = eff_bitrate;
+    let current_gop = eff_gop;
+    // Rebuild config with effective values (USB: unchanged) so logs match WiFi.
+    let mut rate = RateController::new(current_bitrate);
+    let _ = current_gop;
 
     let mut sender = FrameSender {
         socket: &mut video_stream,
@@ -690,7 +989,7 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         total_packets: 0,
         total_frames: 0,
         write_stall_ms_max: 0.0,
-        stats_json: args.stats_json,
+        last_stall_ms: 0.0,
     };
     let mut total_input_frames = 0usize;
     let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
@@ -759,9 +1058,21 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
             let units = encoder.encode(&frame, ts)?;
             for unit in units {
                 sender.send_unit(&unit)?;
+                maybe_adapt(
+                    &mut rate,
+                    sender.last_stall_ms(),
+                    kf_requests.load(Ordering::Relaxed),
+                    &mut current_bitrate,
+                    first.width,
+                    first.height,
+                    args.fps,
+                    current_gop,
+                    args.codec,
+                    &mut encoder,
+                );
             }
             if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
-                println!("{}", sender.stats_line());
+                emit_stats_json(&sender, &input_injected);
             }
             last_streamed = Some(newest);
         }
@@ -811,9 +1122,21 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                         thread::sleep(Duration::from_nanos(target_ns - elapsed_ns));
                     }
                     sender.send_unit(&unit)?;
+                    maybe_adapt(
+                        &mut rate,
+                        sender.last_stall_ms(),
+                        kf_requests.load(Ordering::Relaxed),
+                        &mut current_bitrate,
+                        first.width,
+                        first.height,
+                        args.fps,
+                        current_gop,
+                        args.codec,
+                        &mut encoder,
+                    );
                 }
                 if args.stats_json && sender.total_frames % STATS_FRAME_INTERVAL == 0 {
-                    println!("{}", sender.stats_line());
+                    emit_stats_json(&sender, &input_injected);
                 }
                 next_frame_index += 1;
             }
@@ -845,4 +1168,102 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     );
     println!("stream_complete=true");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wifi_defaults_apply_unless_overridden() {
+        let (b, g) =
+            effective_wifi_tuning(Transport::Wifi, USB_DEFAULT_BITRATE_BPS, USB_DEFAULT_GOP);
+        assert_eq!(b, WIFI_DEFAULT_BITRATE_BPS);
+        assert_eq!(g, WIFI_DEFAULT_GOP);
+        let (b2, g2) = effective_wifi_tuning(Transport::Wifi, 8_000_000, 30);
+        assert_eq!(b2, 8_000_000);
+        assert_eq!(g2, 30);
+        let (b3, g3) =
+            effective_wifi_tuning(Transport::Usb, USB_DEFAULT_BITRATE_BPS, USB_DEFAULT_GOP);
+        assert_eq!(b3, USB_DEFAULT_BITRATE_BPS);
+        assert_eq!(g3, USB_DEFAULT_GOP);
+    }
+
+    #[test]
+    fn rate_controller_starts_at_given_bitrate() {
+        let r = RateController::new(12_000_000);
+        assert_eq!(r.current_bitrate(), 12_000_000);
+        let r2 = RateController::new(20_000_000);
+        assert_eq!(r2.current_bitrate(), 20_000_000);
+    }
+
+    #[test]
+    fn rate_controller_steps_down_on_stall() {
+        let mut r = RateController::new(20_000_000);
+        let mut stepped: Option<u32> = None;
+        for _ in 0..60 {
+            stepped = r.observe(80.0, 0);
+        }
+        assert_eq!(stepped, Some(12_000_000));
+        assert_eq!(r.current_bitrate(), 12_000_000);
+    }
+
+    #[test]
+    fn rate_controller_steps_down_on_keyframe_storm() {
+        let mut r = RateController::new(12_000_000);
+        let mut seen: Option<u32> = None;
+        for i in 1..=5u64 {
+            if let Some(b) = r.observe(5.0, i) {
+                seen = Some(b);
+            }
+        }
+        assert_eq!(seen, Some(8_000_000));
+    }
+
+    #[test]
+    fn rate_controller_steps_up_after_clean_window() {
+        let mut r = RateController::new(12_000_000);
+        for _ in 0..60 {
+            let _ = r.observe(80.0, 0);
+        }
+        // 12M -> 8M on sustained stall.
+        assert_eq!(r.current_bitrate(), 8_000_000);
+        let mut up: Option<u32> = None;
+        for _ in 0..600 {
+            up = r.observe(5.0, 0);
+            if up.is_some() {
+                break;
+            }
+        }
+        assert_eq!(up, Some(12_000_000));
+    }
+
+    #[test]
+    fn frame_sender_tracks_stall_and_stats_json() {
+        let mut sender = FrameSender {
+            socket: Vec::new(),
+            packetizer: Packetizer::new(1024),
+            codec: Codec::H264,
+            width: 64,
+            height: 64,
+            fps: 60,
+            frame_sequence: 1,
+            total_packets: 0,
+            total_frames: 0,
+            write_stall_ms_max: 0.0,
+            last_stall_ms: 0.0,
+        };
+        let unit = usbdisplay_encoder::EncodedUnit {
+            bytes: vec![0u8; 64],
+            keyframe: true,
+            timestamp_ns: 0,
+        };
+        sender.send_unit(&unit).unwrap();
+        assert_eq!(sender.total_frames, 1);
+        assert!(sender.total_packets >= 1);
+        let line = sender.stats_line(7);
+        assert!(line.contains("\"streamed_frames\":1"), "{line}");
+        assert!(line.contains("\"input_events_injected\":7"), "{line}");
+        assert!(line.contains("write_stall_ms_max"), "{line}");
+    }
 }

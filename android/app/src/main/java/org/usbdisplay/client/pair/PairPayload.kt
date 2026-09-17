@@ -16,7 +16,9 @@ object PairPayload {
         if (!json.contains("\"v\":$VERSION")) return null
         val ip = extractString(json, "\"ip\"") ?: return null
         val port = extractInt(json, "\"port\"") ?: return null
+        if (port !in 1..65535) return null
         val fp = extractString(json, "\"fp\"")
+        if (fp != null && fp.isNotEmpty() && !fp.startsWith("SHA256:")) return null
         return PairInfo(ip, port, fp)
     }
 

@@ -143,7 +143,7 @@ fn main() -> Result<()> {
         }
         Command::Capabilities => {
             println!("codecs=h264,h265,av1");
-            println!("transport=adb-compat,native-usb-bulk,wifi-plain(dev-only)");
+            println!("transport=adb-compat,native-usb-bulk,wifi-tls");
             println!("capture=virtual-monitor-only");
             println!("input=hid-touch,hid-pen,keyboard,mouse");
         }
@@ -252,7 +252,6 @@ fn main() -> Result<()> {
                 transport,
                 device_ip,
                 pin,
-                insecure_lan: false, // Deprecated in PR-3
                 stats_json,
             })?;
         }
@@ -263,8 +262,7 @@ fn main() -> Result<()> {
 
 /// %ProgramData%\USBDisplay\capture, matching the driver's dump location.
 fn default_capture_dir() -> std::path::PathBuf {
-    let base = std::env::var("ProgramData")
-        .unwrap_or_else(|_| "C:\\ProgramData".to_string());
+    let base = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".to_string());
     std::path::PathBuf::from(base)
         .join("USBDisplay")
         .join("capture")

@@ -11,9 +11,39 @@ use std::path::PathBuf;
 
 /// Path to the pairing store: %AppData%\USBDisplay\paired.json
 pub fn store_path() -> Result<PathBuf> {
-    let appdata = std::env::var("APPDATA")
-        .context("Failed to get APPDATA environment variable")?;
-    Ok(PathBuf::from(appdata).join("USBDisplay").join("paired.json"))
+    let appdata = std::env::var("APPDATA").context("Failed to get APPDATA environment variable")?;
+    Ok(PathBuf::from(appdata)
+        .join("USBDisplay")
+        .join("paired.json"))
+}
+
+/// Stable host_id for PIN-pairing skip on reconnect.
+///
+/// Uses %COMPUTERNAME% (stable across runs, unlike PID) so the tablet's
+/// trusted-host set recognizes this PC on second connect. Falls back to
+/// %USERNAME%, then a PID-based ephemeral id.
+pub fn stable_host_id() -> String {
+    if let Ok(name) = std::env::var("COMPUTERNAME") {
+        let clean: String = name
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if !clean.is_empty() {
+            return format!("host-{clean}");
+        }
+    }
+    if let Ok(user) = std::env::var("USERNAME") {
+        let clean: String = user
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if !clean.is_empty() {
+            return format!("host-{clean}");
+        }
+    }
+    format!("host-{}", std::process::id())
 }
 
 /// Pairing store data structure.
@@ -40,33 +70,41 @@ impl PairingStore {
 
     pub fn load() -> Result<Self> {
         let path = store_path()?;
+        Self::load_from(&path)
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::new());
         }
-        let content = fs::read_to_string(&path)
+        let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read pairing store from {}", path.display()))?;
-        let store: PairingStore = serde_json::from_str(&content)
-            .with_context(|| "Failed to parse pairing store JSON")?;
+        let store: PairingStore =
+            serde_json::from_str(&content).with_context(|| "Failed to parse pairing store JSON")?;
         Ok(store)
     }
 
     pub fn save(&self) -> Result<()> {
         let path = store_path()?;
+        self.save_to(&path)
+    }
+
+    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize pairing store")?;
-        fs::write(&path, content)
+        let content =
+            serde_json::to_string_pretty(self).context("Failed to serialize pairing store")?;
+        fs::write(path, content)
             .with_context(|| format!("Failed to write pairing store to {}", path.display()))?;
         Ok(())
     }
 
-    pub fn remember(&mut self, tablet_id: &str, fingerprint: &str) {
+    pub fn remember(&mut self, tablet_id: &str, ip: &str, fingerprint: &str) {
         let entry = TabletEntry {
             tablet_id: tablet_id.to_string(),
-            ip: tablet_id.to_string(), // TODO: extract IP from tablet_id
+            ip: ip.to_string(),
             cert_fingerprint: fingerprint.to_string(),
             paired_at: chrono::Utc::now().timestamp(),
         };
@@ -91,33 +129,39 @@ impl Default for PairingStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
     fn test_store_roundtrip() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("paired.json");
+        let dir = std::env::temp_dir().join(format!("usbdisplay-test-{}", std::process::id()));
+        let path = dir.join("paired.json");
+        let _ = std::fs::remove_dir_all(&dir);
 
-        // Create a store and add an entry
         let mut store = PairingStore::new();
-        store.remember("tablet1:27184", "SHA256:abcd1234");
+        store.remember("tablet1:27184", "192.168.1.42", "SHA256:abcd1234");
+        store.save_to(&path).unwrap();
 
-        // Save and reload
-        let content = serde_json::to_string_pretty(&store).unwrap();
-        fs::write(&path, content).unwrap();
-
-        let loaded = PairingStore::load().unwrap();
-        assert_eq!(loaded.fingerprint_for("tablet1:27184"), Some(&"SHA256:abcd1234".to_string()));
+        let loaded = PairingStore::load_from(&path).unwrap();
+        assert_eq!(
+            loaded.fingerprint_for("tablet1:27184"),
+            Some(&"SHA256:abcd1234".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_fingerprint_lookup() {
         let mut store = PairingStore::new();
-        store.remember("a:1", "SHA256:first");
-        store.remember("a:2", "SHA256:second");
+        store.remember("a:1", "10.0.0.1", "SHA256:first");
+        store.remember("a:2", "10.0.0.2", "SHA256:second");
 
-        assert_eq!(store.fingerprint_for("a:1"), Some(&"SHA256:first".to_string()));
-        assert_eq!(store.fingerprint_for("a:2"), Some(&"SHA256:second".to_string()));
+        assert_eq!(
+            store.fingerprint_for("a:1"),
+            Some(&"SHA256:first".to_string())
+        );
+        assert_eq!(
+            store.fingerprint_for("a:2"),
+            Some(&"SHA256:second".to_string())
+        );
         assert_eq!(store.fingerprint_for("a:3"), None);
     }
 
@@ -126,8 +170,16 @@ mod tests {
         let mut store = PairingStore::new();
         assert!(!store.is_paired("unknown"));
 
-        store.remember("known:1", "SHA256:abcd");
+        store.remember("known:1", "10.0.0.9", "SHA256:abcd");
         assert!(store.is_paired("known:1"));
         assert!(!store.is_paired("other:1"));
+    }
+
+    #[test]
+    fn test_stable_host_id_is_stable_and_prefixed() {
+        let a = stable_host_id();
+        let b = stable_host_id();
+        assert_eq!(a, b);
+        assert!(a.starts_with("host-"));
     }
 }

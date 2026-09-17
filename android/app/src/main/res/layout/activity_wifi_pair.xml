@@ -20,7 +20,24 @@
         android:layout_height="wrap_content"
         android:text="IP: Loading..."
         android:textSize="18sp"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/wifi_fp_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="SHA256:…"
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/wifi_pin_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="PIN: ------"
+        android:textSize="48sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
 
     <ImageView
         android:id="@+id/qr_image"
@@ -29,10 +46,24 @@
         android:layout_marginBottom="24dp"
         android:contentDescription="QR Code" />
 
-    <Button
-        android:id="@+id/rotate_button"
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Rotate" />
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/rotate_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Rotate PIN" />
+
+        <Button
+            android:id="@+id/forget_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Forget hosts"
+            android:layout_marginStart="16dp" />
+
+    </LinearLayout>
 
 </LinearLayout>

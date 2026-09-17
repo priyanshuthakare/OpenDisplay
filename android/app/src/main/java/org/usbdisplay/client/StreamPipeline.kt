@@ -29,7 +29,7 @@ class StreamPipeline(
 ) {
     private var codec: MediaCodec? = null
     private val frameReassembler = FrameReassembler()
-    private val framePacer = FramePacer()
+    private val presenter = PipelinePresenter()
     private val outputLock = Any()
     private var output: OutputStream? = null
     private val packetSequence = AtomicLong(1)
@@ -184,7 +184,7 @@ class StreamPipeline(
         val bufferInfo = MediaCodec.BufferInfo()
         val outputIndex = codec!!.dequeueOutputBuffer(bufferInfo, 10000)
         if (outputIndex >= 0) {
-            framePacer.present(codec!!, outputIndex, bufferInfo, surface)
+            presenter.present(codec!!, outputIndex, bufferInfo, surface)
         }
     }
 
@@ -217,14 +217,14 @@ class StreamPipeline(
     }
 }
 
-internal data class Fragment(
+data class Fragment(
     val frameSequence: Long,
     val index: Int,
     val total: Int,
     val bytes: ByteArray,
 )
 
-internal data class Frame(
+data class Frame(
     val sequence: Long,
     val payload: ByteArray,
 )
@@ -257,7 +257,7 @@ class FrameReassembler {
     }
 }
 
-class FramePacer {
+private class PipelinePresenter {
     private var lastPresentTimeUs: Long = 0
 
     fun present(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo, surface: Surface) {
@@ -289,6 +289,6 @@ private fun readExactly(input: BufferedInputStream, len: Int): ByteArray? {
 }
 
 internal fun readU32LE(input: BufferedInputStream): Int {
-    val bytes = readExactly(input, 4)
+    val bytes = readExactly(input, 4) ?: throw java.io.EOFException("eof reading u32")
     return ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).int
 }

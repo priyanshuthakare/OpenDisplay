@@ -8,7 +8,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.View
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -25,6 +24,7 @@ import org.usbdisplay.client.transport.PointerButton
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var surfaceView: SurfaceView
     private var streamSession: StreamSession? = null
+    private var wifiListener: WifiListener? = null
     private var streamPipeline: StreamPipeline? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -158,10 +158,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        // One shared decode pipeline for USB + WiFi so framing stays identical.
         streamSession?.stop()
-        streamSession = StreamSession(holder.surface).also { it.start() }
+        wifiListener?.stop()
         streamPipeline?.release()
-        streamPipeline = StreamPipeline(holder.surface)
+        val pipeline = StreamPipeline(holder.surface)
+        streamPipeline = pipeline
+        streamSession = StreamSession(holder.surface, pipeline).also { it.start() }
+        wifiListener = WifiListener(this, pipeline).also { it.start() }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -170,11 +174,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         streamSession?.stop()
         streamSession = null
+        wifiListener?.stop()
+        wifiListener = null
     }
 
     override fun onDestroy() {
         streamSession?.stop()
         streamSession = null
+        wifiListener?.stop()
+        wifiListener = null
         streamPipeline?.release()
         streamPipeline = null
         super.onDestroy()
