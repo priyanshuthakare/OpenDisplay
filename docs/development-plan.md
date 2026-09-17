@@ -43,6 +43,14 @@ Milestones:
 - Add fragmentation, CRC, double buffering, and reconnect state machines.
 - Detect USB 2 versus USB 3 throughput and adjust bitrate.
 
+Status: ADB-forwarded TCP transport works. `stream-capture` defaults to a live
+"latest-frame-wins" mode: each tick it encodes only the newest captured frame,
+deletes the stale backlog (bounding disk), and timestamps with the real wall
+clock so the client presents with minimal latency instead of accumulating a
+growing lag. `--no-live` restores ordered fixed-fps file replay. Still open:
+native USB bulk endpoints, the disk-free shared-memory handoff, reconnect state
+machine, and USB 2/3 bitrate adaptation.
+
 ## Phase 5: Android Decode and Render
 
 Milestones:
@@ -52,6 +60,15 @@ Milestones:
 - Add adaptive buffering and decoder backpressure.
 - Add 60 fps and 120 fps validation.
 
+Status: the client decodes H.264/H.265 with `MediaCodec` to a `SurfaceView`.
+Frames are now paced: a pure `FramePacer` maps each frame's presentation
+timestamp to a `System.nanoTime` deadline anchored on the first frame, and the
+decoder presents via the timestamped `releaseOutputBuffer(index, presentNs)` so
+bursty USB arrival is smoothed to the encoded cadence. Backpressure is applied
+by draining output and retrying instead of dropping payloads when the decoder is
+full. Still open: adaptive buffering tuning and on-device 60/120 fps latency
+validation (needs hardware).
+
 ## Phase 6: Input
 
 Milestones:
@@ -59,6 +76,17 @@ Milestones:
 - Map Android touch to Windows HID touch.
 - Map stylus pressure, tilt, eraser, and buttons to Windows Ink.
 - Add keyboard, IME, mouse absolute mode, mouse relative mode, and scroll wheel.
+
+Status: the input return channel is implemented as a software slice. Android
+captures touch (including batched historical move samples) and keyboard input,
+normalizes pointer coordinates to `0..65535`, and sends fixed 16-byte tagged
+input events back to the host inside transport `Control` packets. The host reads
+them on a dedicated thread and injects absolute mouse move/click/scroll plus
+keyboard (Unicode text via `KEYEVENTF_UNICODE` and named editing keys via
+virtual-key codes) with Win32 `SendInput`. Still open: stylus pressure/tilt/
+eraser, IME composition, relative mouse mode, and routing input as a dedicated
+HID device bound to the virtual monitor (driver-side). See
+[protocol.md](protocol.md#input-return-channel).
 
 ## Phase 7: Diagnostics and Packaging
 

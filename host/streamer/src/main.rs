@@ -1,14 +1,26 @@
 mod adb;
 mod encode_capture;
+mod input_inject;
+mod pairing;
 mod stream_android;
+mod wifi;
 
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use usbdisplay_encoder::Codec as EncoderCodec;
 use usbdisplay_protocol::{Codec, EncodedFrame, FrameFlags};
 use usbdisplay_transport::{Packetizer, DEFAULT_MAX_PACKET_PAYLOAD};
+
+/// Transport used by `stream-capture`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum TransportKind {
+    /// ADB-forwarded USB (current behavior, default).
+    Usb,
+    /// WiFi LAN (PR-1: flag only, errors until PR-2 lands).
+    Wifi,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "usbdisplay-streamer")]
@@ -88,6 +100,24 @@ enum Command {
         /// Replay the frame set continuously until interrupted.
         #[arg(long, default_value_t = false)]
         r#loop: bool,
+        /// Live second-monitor mode (default): always stream the newest capture
+        /// and drop the stale backlog for minimal latency. Use --no-live for
+        /// ordered fixed-fps file replay.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        live: bool,
+        /// Transport: usb (ADB-forwarded, default) or wifi (LAN, PR-1 errors).
+        #[arg(long, value_enum, default_value_t = TransportKind::Usb)]
+        transport: TransportKind,
+        /// WiFi tablet address: bare IP, ip:port, or QR JSON payload.
+        /// Only used with --transport wifi.
+        #[arg(long)]
+        device_ip: Option<String>,
+        /// WiFi pairing PIN shown on the tablet. Only used with --transport wifi.
+        #[arg(long)]
+        pin: Option<String>,
+        /// Print streaming stats as JSON every 60 frames.
+        #[arg(long, default_value_t = false)]
+        stats_json: bool,
     },
 }
 
@@ -113,7 +143,7 @@ fn main() -> Result<()> {
         }
         Command::Capabilities => {
             println!("codecs=h264,h265,av1");
-            println!("transport=adb-compat,native-usb-bulk");
+            println!("transport=adb-compat,native-usb-bulk,wifi-tls");
             println!("capture=virtual-monitor-only");
             println!("input=hid-touch,hid-pen,keyboard,mouse");
         }
@@ -192,6 +222,11 @@ fn main() -> Result<()> {
             serial,
             max_frames,
             r#loop,
+            live,
+            transport,
+            device_ip,
+            pin,
+            stats_json,
         } => {
             let codec = match codec.to_ascii_lowercase().as_str() {
                 "h264" | "avc" => EncoderCodec::H264,
@@ -199,6 +234,10 @@ fn main() -> Result<()> {
                 other => anyhow::bail!("unknown codec '{other}' (use h264 or h265)"),
             };
             let input_dir = input_dir.unwrap_or_else(default_capture_dir);
+            let transport = match transport {
+                TransportKind::Usb => stream_android::Transport::Usb,
+                TransportKind::Wifi => stream_android::Transport::Wifi,
+            };
             stream_android::run(stream_android::StreamCaptureArgs {
                 input_dir,
                 codec,
@@ -209,6 +248,11 @@ fn main() -> Result<()> {
                 serial,
                 max_frames,
                 loop_forever: r#loop,
+                live,
+                transport,
+                device_ip,
+                pin,
+                stats_json,
             })?;
         }
     }
@@ -218,8 +262,7 @@ fn main() -> Result<()> {
 
 /// %ProgramData%\USBDisplay\capture, matching the driver's dump location.
 fn default_capture_dir() -> std::path::PathBuf {
-    let base = std::env::var("ProgramData")
-        .unwrap_or_else(|_| "C:\\ProgramData".to_string());
+    let base = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".to_string());
     std::path::PathBuf::from(base)
         .join("USBDisplay")
         .join("capture")

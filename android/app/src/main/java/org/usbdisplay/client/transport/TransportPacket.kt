@@ -14,7 +14,8 @@ enum class PacketKind(val wireValue: Int) {
     Ack(2),
     Heartbeat(3),
     KeyframeRequest(4),
-    Control(5);
+    Control(5),
+    Handshake(6);
 
     companion object {
         fun fromWire(value: Int): PacketKind =
@@ -75,6 +76,9 @@ data class TransportPacket(
 
         fun heartbeat(packetSequence: Long): TransportPacket =
             create(PacketKind.Heartbeat, packetSequence, 0, 0, 0, ByteArray(0))
+
+        fun handshake(packetSequence: Long, payload: ByteArray): TransportPacket =
+            create(PacketKind.Handshake, packetSequence, 0, 0, 0, payload)
 
         fun create(
             kind: PacketKind,

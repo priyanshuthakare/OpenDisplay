@@ -32,6 +32,18 @@ class TransportPacketTest {
     }
 
     @Test
+    fun handshakeRoundTrips() {
+        val packet = TransportPacket.handshake(
+            packetSequence = 7,
+            payload = byteArrayOf(9, 8, 7),
+        )
+
+        val decoded = TransportPacket.decode(packet.encode())
+        assertEquals(packet.header, decoded.header)
+        assertArrayEquals(packet.payload, decoded.payload)
+    }
+
+    @Test
     fun rejectsCorruptPayload() {
         val bytes = TransportPacket.frameFragment(
             packetSequence = 1,

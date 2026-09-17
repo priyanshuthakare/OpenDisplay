@@ -33,3 +33,17 @@
 - Host GPU under 15 percent during steady state
 - Host memory under 250 MB
 
+## WiFi Gates (PR-4)
+
+- 1080p60 glass-to-glass **<80 ms p50, <120 ms p95** on WiFi 5/6 (see `docs/wifi.md`).
+- Soak 5 min on WiFi: no disconnect, `bitrate_step_down`/`bitrate_step_up`
+  lines show adaptation under artificial loss and recovery when clean.
+- Input round-trip: touch drag + key type on tablet arrive via `Control`
+  packets (`input_events_injected` increments; `--stats-json` includes it).
+- Pairing: wrong PIN rejected; regenerated cert rejected with fingerprint
+  guidance; second connect from same host skips PIN; AP-isolated SSID prints
+  `host unreachable … use USB` and never falls back silently.
+- Suites: `cargo test --workspace` green; `:app:testDebugUnitTest` green
+  (covers QR parse, PIN verify + lockout, fp format, handshake encode/decode,
+  `RateController`, pairing store).
+

@@ -1,0 +1,59 @@
+name: Rust
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux exercises the portable cfg(not(windows)) fallbacks; Windows
+        # exercises the real Media Foundation encoder and SendInput input path.
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Test workspace
+        run: cargo test --workspace --locked
+
+  lint:
+    name: fmt & clippy (non-blocking)
+    runs-on: ubuntu-latest
+    # Surfaces pre-existing formatting/clippy debt without blocking merges.
+    # Tighten to a hard gate once the backlog is cleared.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain with rustfmt and clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets

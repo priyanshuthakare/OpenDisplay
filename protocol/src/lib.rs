@@ -7,6 +7,13 @@
 use crc32fast::Hasher;
 use thiserror::Error;
 
+pub mod input;
+
+pub use input::{
+    InputAction, InputError, InputEvent, InputKind, KeyAction, KeyEvent, NamedKey, PointerButton,
+    PointerEvent, INPUT_EVENT_LEN,
+};
+
 pub const MAGIC: [u8; 4] = *b"USBD";
 pub const VERSION: u16 = 1;
 pub const HEADER_LEN: usize = 50;

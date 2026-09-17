@@ -23,6 +23,12 @@ pub enum PacketKind {
     Heartbeat = 3,
     KeyframeRequest = 4,
     Control = 5,
+    /// Connection-setup handshake (WiFi pairing / capability negotiation).
+    ///
+    /// Carries an opaque handshake payload negotiated inside the (TLS)
+    /// transport. Receivers that do not understand the handshake version
+    /// must ignore the packet — the same rule as other non-Fragment kinds.
+    Handshake = 6,
 }
 
 impl TryFrom<u8> for PacketKind {
@@ -35,6 +41,7 @@ impl TryFrom<u8> for PacketKind {
             3 => Ok(Self::Heartbeat),
             4 => Ok(Self::KeyframeRequest),
             5 => Ok(Self::Control),
+            6 => Ok(Self::Handshake),
             other => Err(TransportError::UnknownPacketKind(other)),
         }
     }
@@ -70,6 +77,7 @@ pub enum ReceivedPacket {
     Heartbeat { packet_sequence: u64 },
     KeyframeRequest { frame_sequence: u64 },
     Control(Vec<u8>),
+    Handshake(Vec<u8>),
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -120,6 +128,10 @@ impl TransportPacket {
 
     pub fn heartbeat(packet_sequence: u64) -> Self {
         Self::new(PacketKind::Heartbeat, packet_sequence, 0, 0, 0, Vec::new())
+    }
+
+    pub fn handshake(packet_sequence: u64, payload: Vec<u8>) -> Self {
+        Self::new(PacketKind::Handshake, packet_sequence, 0, 0, 0, payload)
     }
 
     pub fn keyframe_request(packet_sequence: u64, frame_sequence: u64) -> Self {
@@ -251,6 +263,7 @@ impl TransportPacket {
                 frame_sequence: self.header.frame_sequence,
             }),
             PacketKind::Control => Ok(ReceivedPacket::Control(self.payload)),
+            PacketKind::Handshake => Ok(ReceivedPacket::Handshake(self.payload)),
         }
     }
 }
@@ -540,6 +553,19 @@ mod tests {
         let decoded =
             TransportPacket::decode(&packet.encode(), DEFAULT_MAX_PACKET_PAYLOAD).unwrap();
         assert_eq!(decoded, packet);
+    }
+
+    #[test]
+    fn handshake_packet_round_trips() {
+        let packet = TransportPacket::handshake(7, b"hello-wifi".to_vec());
+
+        let decoded =
+            TransportPacket::decode(&packet.encode(), DEFAULT_MAX_PACKET_PAYLOAD).unwrap();
+        assert_eq!(decoded, packet);
+        match decoded.into_received().unwrap() {
+            ReceivedPacket::Handshake(payload) => assert_eq!(payload, b"hello-wifi"),
+            other => panic!("expected Handshake, got {other:?}"),
+        }
     }
 
     #[test]
