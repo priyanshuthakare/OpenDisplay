@@ -19,6 +19,12 @@ driver/idd/obj/
 driver/idd/*.user
 driver/idd/package/
 
+# .NET control app build outputs
+control-app/**/bin/
+control-app/**/obj/
+control-app/publish/
+control-app/TestResults/
+
 # OS
 Thumbs.db
 .DS_Store

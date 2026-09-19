@@ -205,16 +205,11 @@ mod windows_impl {
                             }
                             Err(_) => {
                                 // No NV12 offered; fall back to a bare NV12 type.
-                                let nv12: IMFMediaType = MFCreateMediaType().map_err(|e| {
-                                    DecodeError::Backend(format!("sc type: {e}"))
-                                })?;
+                                let nv12: IMFMediaType = MFCreateMediaType()
+                                    .map_err(|e| DecodeError::Backend(format!("sc type: {e}")))?;
                                 nv12.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-                                    .and_then(|_| {
-                                        nv12.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)
-                                    })
-                                    .map_err(|e| {
-                                        DecodeError::Backend(format!("sc attrs: {e}"))
-                                    })?;
+                                    .and_then(|_| nv12.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12))
+                                    .map_err(|e| DecodeError::Backend(format!("sc attrs: {e}")))?;
                                 transform.SetOutputType(0, &nv12, 0).map_err(|e| {
                                     DecodeError::Backend(format!("sc set fallback: {e}"))
                                 })?;
@@ -316,4 +311,3 @@ mod windows_impl {
     #[allow(unused_imports)]
     use Interface as _KeepInterface;
 }
-

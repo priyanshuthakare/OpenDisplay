@@ -1,0 +1,101 @@
+<Window x:Class="USBDisplay.ControlApp.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:USBDisplay.ControlApp.ViewModels"
+        xmlns:views="clr-namespace:USBDisplay.ControlApp.UI.Views"
+        Title="USBDisplay Control Center" Height="720" Width="1080"
+        MinHeight="600" MinWidth="900">
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
+      <views:DashboardView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:DriverViewModel}">
+      <views:DriverView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:DisplayViewModel}">
+      <views:DisplayView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:DeviceViewModel}">
+      <views:DeviceView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:ServicesViewModel}">
+      <views:ServicesView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:LogsViewModel}">
+      <views:LogsView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:DiagnosticsViewModel}">
+      <views:DiagnosticsView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+      <views:SettingsView/>
+    </DataTemplate>
+  </Window.Resources>
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="170"/>
+      <ColumnDefinition Width="*"/>
+    </Grid.ColumnDefinitions>
+
+    <!-- Top bar -->
+    <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{StaticResource Card}"
+            BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1" Padding="14,8">
+      <DockPanel>
+        <TextBlock Text="USBDisplay" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+        <TextBlock Text="{Binding SystemBadge}" Margin="16,0,0,0" VerticalAlignment="Center"
+                   Foreground="{StaticResource Accent}" FontWeight="Bold"/>
+        <TextBlock Text="DEMO MODE" Margin="12,0,0,0" VerticalAlignment="Center"
+                   Foreground="{StaticResource Warn}" FontWeight="Bold"
+                   Visibility="{Binding DemoMode, Converter={StaticResource BoolToVis}}"/>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="{Binding AdminDetail}" Foreground="{StaticResource Dim}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+          <TextBlock Text="{Binding AdminBadge}" FontWeight="Bold" VerticalAlignment="Center"/>
+          <Button Content="Refresh" Command="{Binding Refresh}" Margin="12,0,0,0"/>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- Nav -->
+    <StackPanel Grid.Row="1" Grid.Column="0" Background="{StaticResource Card}" Margin="0,0,0,0">
+      <Button Content="Dashboard" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Dashboard"/>
+      <Button Content="Driver" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Driver"/>
+      <Button Content="Display" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Display"/>
+      <Button Content="Device" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Device"/>
+      <Button Content="Services" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Services"/>
+      <Button Content="Logs" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Logs"/>
+      <Button Content="Diagnostics" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Diagnostics"/>
+      <Button Content="Settings" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Settings"/>
+    </StackPanel>
+
+    <!-- Page -->
+    <ScrollViewer Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="8">
+      <ContentControl Content="{Binding CurrentViewModel}"/>
+    </ScrollViewer>
+
+    <!-- First-run overlay -->
+    <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="0" Grid.ColumnSpan="2"
+            Background="#E010131A"
+            Visibility="{Binding ShowFirstRun, Converter={StaticResource BoolToVis}}">
+      <Border Style="{StaticResource CardBorder}" Width="560" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel>
+          <TextBlock Text="Welcome to USBDisplay" FontSize="22" FontWeight="Bold" Margin="0,0,0,8"/>
+          <TextBlock Text="Connect your Android tablet to turn it into a secondary Windows display."
+                     TextWrapping="Wrap" Foreground="{StaticResource Dim}" Margin="0,0,0,12"/>
+          <TextBlock Text="01  USBDisplay driver — see the Driver page to install (admin required)." Margin="0,2"/>
+          <TextBlock Text="02  Android device — connect over USB, enable USB debugging." Margin="0,2"/>
+          <TextBlock Text="03  Verify — run Diagnostics, then START USB DISPLAY." Margin="0,2"/>
+          <TextBlock Text="Changing resolution later restarts the capture pipeline." Foreground="{StaticResource Dim}" Margin="0,8,0,12" TextWrapping="Wrap"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Open Diagnostics" Command="{Binding Navigate}" CommandParameter="Diagnostics"/>
+            <Button Content="Get Started" Style="{StaticResource PrimaryButton}" Command="{Binding CloseFirstRun}"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Border>
+  </Grid>
+</Window>

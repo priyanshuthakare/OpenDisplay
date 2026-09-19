@@ -9,7 +9,6 @@ import org.usbdisplay.client.pair.TabletIdentity
 import org.usbdisplay.client.transport.PacketKind
 import org.usbdisplay.client.transport.TransportPacket
 import java.io.BufferedInputStream
-import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -143,7 +142,9 @@ class WifiListener(
                 ),
             )
             socket.soTimeout = 0
-            pipeline.handleClient(BufferedInputStream(socket.getInputStream()), socket.getOutputStream())
+            // Reuse `input`: it may already hold TLS bytes coalesced past the
+            // Hello, which a fresh BufferedInputStream would silently drop.
+            pipeline.handleClient(input, output)
             return
         }
         // PIN check with lockout.
@@ -158,7 +159,8 @@ class WifiListener(
                     ),
                 )
                 socket.soTimeout = 0
-                pipeline.handleClient(BufferedInputStream(socket.getInputStream()), socket.getOutputStream())
+                // Reuse `input` (see above): never re-wrap the socket stream.
+                pipeline.handleClient(input, output)
             }
             is PinVerifier.Result.Wrong -> {
                 Log.w(TAG, "Wrong PIN (${r.retriesLeft} retries left)")
@@ -202,5 +204,3 @@ class WifiListener(
 
     private fun ByteArray.inputStream() = java.io.ByteArrayInputStream(this)
 }
-
-private fun ByteArrayOutputStream.inputStream() = java.io.ByteArrayInputStream(this.toByteArray())

@@ -131,9 +131,18 @@ fn server_name_for_host(ip: &str) -> Result<ServerName<'static>> {
 
 /// PR-3 entry point: connect to the tablet over LAN with TLS 1.3 + PIN.
 pub fn connect_tls(device: &WifiDevice, pin: Option<&str>) -> Result<TlsConnection> {
-    let addr = resolve_addr(&device.addr())?;
-
     let mut store = PairingStore::load().context("Failed to load pairing store")?;
+    connect_tls_with_store(device, pin, &mut store)
+}
+
+/// Same as [`connect_tls`] but against a caller-provided pairing store.
+/// Used by tests to avoid touching `%AppData%`.
+pub fn connect_tls_with_store(
+    device: &WifiDevice,
+    pin: Option<&str>,
+    store: &mut PairingStore,
+) -> Result<TlsConnection> {
+    let addr = resolve_addr(&device.addr())?;
 
     let tablet_id = device.addr();
     let stored_fingerprint = store.fingerprint_for(&tablet_id).cloned();
@@ -168,7 +177,7 @@ pub fn connect_tls(device: &WifiDevice, pin: Option<&str>) -> Result<TlsConnecti
         )
     })?;
 
-    perform_handshake(&mut tls_stream, pin, &tablet_id, &device.ip, &mut store)?;
+    perform_handshake(&mut tls_stream, pin, &tablet_id, &device.ip, store)?;
 
     Ok(TlsConnection { stream: tls_stream })
 }
@@ -195,11 +204,10 @@ fn build_tls_config(
         qr_fingerprint: qr_fingerprint.map(|s| s.to_string()),
     });
 
-    let mut config = ClientConfig::builder()
+    let mut config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
-    // TLS 1.3 only per product decision.
     config.alpn_protocols.clear();
     Ok(config)
 }
@@ -428,5 +436,133 @@ mod tests {
     fn server_name_accepts_ip_and_dns() {
         assert!(server_name_for_host("192.168.1.42").is_ok());
         assert!(server_name_for_host("tablet.local").is_ok());
+    }
+
+    /// End-to-end loopback validation of the WiFi pairing path against a
+    /// tablet-like TLS server (P-256 self-signed cert, TLS 1.3, one framed
+    /// Hello/Welcome exchange mirroring `WifiListener` + `Handshake`).
+    #[test]
+    fn tls_pairing_handshake_against_tablet_like_server() {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        use std::io::Write;
+        use usbdisplay_transport::{PacketKind, TransportPacket};
+
+        fn spawn_tablet_like_server(
+            cert_der: Vec<u8>,
+            key_der: Vec<u8>,
+            expected_pin: &str,
+        ) -> (u16, std::thread::JoinHandle<Option<String>>) {
+            let expected_pin = expected_pin.to_string();
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = std::thread::spawn(move || -> Option<String> {
+                let server_config = rustls::ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(
+                        vec![CertificateDer::from(cert_der)],
+                        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
+                    )
+                    .ok()?;
+                let (sock, _) = listener.accept().ok()?;
+                sock.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+                let conn =
+                    rustls::ServerConnection::new(std::sync::Arc::new(server_config)).ok()?;
+                let mut tls = rustls::StreamOwned::new(conn, sock);
+                let mut len = [0u8; 4];
+                tls.read_exact(&mut len).ok()?;
+                let len = u32::from_le_bytes(len) as usize;
+                if len == 0 || len > 64 * 1024 {
+                    return None;
+                }
+                let mut body = vec![0u8; len];
+                tls.read_exact(&mut body).ok()?;
+                // The tablet negotiates TLS 1.3 only.
+                assert_eq!(
+                    tls.conn.protocol_version(),
+                    Some(rustls::ProtocolVersion::TLSv1_3)
+                );
+                let packet = TransportPacket::decode(&body, 64 * 1024).ok()?;
+                if packet.header.kind != PacketKind::Handshake {
+                    return None;
+                }
+                let hello = String::from_utf8(packet.payload).ok()?;
+                let value: serde_json::Value = serde_json::from_str(&hello).ok()?;
+                let accept = value["pin"].as_str() == Some(expected_pin.as_str());
+                let welcome = if accept {
+                    serde_json::json!({"v":1,"accept":true,"tablet_id":"tablet-test","fp":"SHA256:00"})
+                } else {
+                    serde_json::json!({"v":1,"accept":false,"reason":"bad-pin"})
+                }
+                .to_string();
+                let reply = TransportPacket::handshake(1, welcome.into_bytes()).encode();
+                tls.write_all(&(reply.len() as u32).to_le_bytes()).ok()?;
+                tls.write_all(&reply).ok()?;
+                tls.flush().ok()?;
+                accept.then_some(hello)
+            });
+            (port, handle)
+        }
+
+        fn tablet_like_identity() -> (Vec<u8>, Vec<u8>) {
+            // Same shape as Android TabletIdentity: P-256 self-signed cert.
+            let certified =
+                rcgen::generate_simple_self_signed(vec!["usbdisplay-tablet".to_string()]).unwrap();
+            let cert_der: Vec<u8> = certified.cert.der().as_ref().to_vec();
+            let key_der: Vec<u8> = certified.key_pair.serialize_der();
+            (cert_der, key_der)
+        }
+
+        // 1. Happy path: correct PIN over a TOFU QR fingerprint.
+        let (cert_der, key_der) = tablet_like_identity();
+        let expected_fp = certificate_fingerprint(&cert_der);
+        let (port, server) = spawn_tablet_like_server(cert_der.clone(), key_der.clone(), "123456");
+        let device = WifiDevice {
+            ip: "127.0.0.1".to_string(),
+            port,
+            fingerprint: Some(expected_fp.clone()),
+        };
+        let mut store = PairingStore::new();
+        let conn = connect_tls_with_store(&device, Some("123456"), &mut store).unwrap();
+        drop(conn);
+        let hello = server.join().unwrap().expect("server saw a valid Hello");
+        assert!(hello.contains("\"pin\":\"123456\""), "{hello}");
+        assert!(hello.contains("\"host_id\":\""), "{hello}");
+        assert!(hello.contains("\"codecs\":[\"h264\",\"h265\"]"), "{hello}");
+        // TOFU pinning recorded the live peer fingerprint.
+        assert_eq!(
+            store.fingerprint_for(&device.addr()).map(String::as_str),
+            Some(expected_fp.as_str())
+        );
+
+        // 2. Wrong PIN is rejected with actionable guidance.
+        let (port, server) = spawn_tablet_like_server(cert_der.clone(), key_der.clone(), "123456");
+        let device = WifiDevice {
+            ip: "127.0.0.1".to_string(),
+            port,
+            fingerprint: Some(expected_fp.clone()),
+        };
+        let mut store = PairingStore::new();
+        let err = connect_tls_with_store(&device, Some("000000"), &mut store)
+            .err()
+            .expect("wrong PIN must fail");
+        assert!(err.to_string().contains("wrong PIN"), "{err:#}");
+        assert!(server.join().unwrap().is_none());
+
+        // 3. Cert mismatch (rotated tablet cert, stale QR fp) fails pre-Hello.
+        let (rotated_der, rotated_key) = tablet_like_identity();
+        assert_ne!(certificate_fingerprint(&rotated_der), expected_fp);
+        let (port, server) = spawn_tablet_like_server(rotated_der, rotated_key, "123456");
+        let device = WifiDevice {
+            ip: "127.0.0.1".to_string(),
+            port,
+            fingerprint: Some(expected_fp.clone()),
+        };
+        let mut store = PairingStore::new();
+        let err = connect_tls_with_store(&device, Some("123456"), &mut store)
+            .err()
+            .expect("cert mismatch must fail");
+        assert!(err.to_string().contains("fingerprint"), "{err:#}");
+        assert!(server.join().unwrap().is_none());
+        assert!(!store.is_paired(&device.addr()));
     }
 }

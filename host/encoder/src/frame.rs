@@ -34,7 +34,9 @@ impl BgraFrame {
     /// Construct from a raw BGRA byte buffer (4 bytes per pixel, B,G,R,A order).
     /// Returns `None` on any size mismatch.
     pub fn from_bytes(width: u32, height: u32, bytes: &[u8]) -> Option<Self> {
-        let expected = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+        let expected = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
         if bytes.len() != expected {
             return None;
         }

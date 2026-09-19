@@ -64,6 +64,22 @@
             android:text="Forget hosts"
             android:layout_marginStart="16dp" />
 
+        <Button
+            android:id="@+id/scan_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Scan PC code"
+            android:layout_marginStart="16dp" />
+
     </LinearLayout>
+
+    <Button
+        android:id="@+id/new_cert_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="New certificate"
+        android:layout_marginTop="16dp" />
+
+
 
 </LinearLayout>

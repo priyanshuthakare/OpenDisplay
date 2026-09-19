@@ -1,0 +1,39 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.7.11925.98 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2426269D-E922-4A1E-819F-FE82B05992FE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "USBDisplay.ControlApp", "src\USBDisplay.ControlApp\USBDisplay.ControlApp.csproj", "{9BE24735-DCAD-4795-B488-58F8DDF465BE}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{9C533C6C-1DE4-48C6-9448-371C1F3CA5CA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "USBDisplay.ControlApp.Tests", "tests\USBDisplay.ControlApp.Tests\USBDisplay.ControlApp.Tests.csproj", "{5F8790F5-9590-4F08-BB1D-7055D061DF97}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9BE24735-DCAD-4795-B488-58F8DDF465BE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9BE24735-DCAD-4795-B488-58F8DDF465BE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9BE24735-DCAD-4795-B488-58F8DDF465BE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9BE24735-DCAD-4795-B488-58F8DDF465BE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5F8790F5-9590-4F08-BB1D-7055D061DF97}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F8790F5-9590-4F08-BB1D-7055D061DF97}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5F8790F5-9590-4F08-BB1D-7055D061DF97}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5F8790F5-9590-4F08-BB1D-7055D061DF97}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{9BE24735-DCAD-4795-B488-58F8DDF465BE} = {2426269D-E922-4A1E-819F-FE82B05992FE}
+		{5F8790F5-9590-4F08-BB1D-7055D061DF97} = {9C533C6C-1DE4-48C6-9448-371C1F3CA5CA}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {36C79A85-1327-4F67-ACA3-3871F8B6D787}
+	EndGlobalSection
+EndGlobal
