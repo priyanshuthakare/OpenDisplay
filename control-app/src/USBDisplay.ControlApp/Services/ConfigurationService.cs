@@ -15,7 +15,15 @@ public interface IConfigurationService
 
 public sealed class ConfigurationService : IConfigurationService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        // Schema-tolerant load: unknown future fields are ignored, missing
+        // fields keep defaults, comments/trailing commas tolerated.
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
 
     public AppSettings Settings { get; private set; } = new();
     public string SettingsPath { get; }
@@ -49,7 +57,7 @@ public sealed class ConfigurationService : IConfigurationService
         {
             if (File.Exists(SettingsPath))
             {
-                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions);
                 if (loaded != null)
                 {
                     Settings = loaded;

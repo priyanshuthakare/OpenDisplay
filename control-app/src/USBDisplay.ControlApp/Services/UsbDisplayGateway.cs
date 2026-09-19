@@ -19,6 +19,8 @@ public interface IUsbDisplayGateway
     string StatusMessage { get; }
     IReadOnlyList<StartupStep> StartupSteps { get; }
     StreamTelemetry Telemetry { get; }
+    WifiLinkInfo? WifiLink { get; }
+    ErrorReport? LastError { get; }
     DriverInfo? Driver { get; }
     IReadOnlyList<DisplayInfo> Displays { get; }
     IReadOnlyList<DeviceInfo> Devices { get; }
@@ -30,6 +32,8 @@ public interface IUsbDisplayGateway
 
     event EventHandler? Changed;
 
+    UsbDisplayState GetStateSnapshot();
+    Task SwitchTransportAsync(TransportKind kind);
     Task RefreshAllAsync(CancellationToken ct = default);
     Task StartAsync(CancellationToken ct = default);
     Task StopAsync();
@@ -58,6 +62,7 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
     private readonly IDisplayManager _displays;
     private readonly IProcessManager _processes;
     private readonly IDiagnosticsService _diagnostics;
+    private readonly Transport.IWifiPreflight _preflight;
     private readonly System.Timers.Timer _pollTimer;
     private readonly System.Timers.Timer _telemetryTimer;
 
@@ -71,7 +76,8 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
         IConfigurationService config, IElevationService elevation, IDriverManager drivers,
         IStreamerCli streamer, IAdbClient adb, IDisplayManager displays,
         IProcessManager processes, IDiagnosticsService diagnostics, ILogService log,
-        TimeSpan? firstFrameTimeout = null)
+        TimeSpan? firstFrameTimeout = null,
+        Transport.IWifiPreflight? preflight = null)
     {
         _config = config;
         _elevation = elevation;
@@ -81,6 +87,7 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
         _displays = displays;
         _processes = processes;
         _diagnostics = diagnostics;
+        _preflight = preflight ?? new Transport.WifiTlsTransport(config);
         _firstFrameTimeout = firstFrameTimeout ?? TimeSpan.FromSeconds(45);
         Log = log;
         _pollTimer = new System.Timers.Timer(TimeSpan.FromSeconds(5).TotalMilliseconds) { AutoReset = true };
@@ -97,6 +104,8 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
     public string StatusMessage { get; private set; } = "Stopped.";
     public IReadOnlyList<StartupStep> StartupSteps { get; private set; } = Array.Empty<StartupStep>();
     public StreamTelemetry Telemetry { get; private set; } = new StreamTelemetry(0, 0, 0, 0, 0, "—", "—", "—", 0, 0, 0, 0, DateTimeOffset.Now);
+    public WifiLinkInfo? WifiLink { get; private set; }
+    public ErrorReport? LastError { get; private set; }
     public DriverInfo? Driver { get; private set; }
     public IReadOnlyList<DisplayInfo> Displays { get; private set; } = Array.Empty<DisplayInfo>();
     public IReadOnlyList<DeviceInfo> Devices { get; private set; } = Array.Empty<DeviceInfo>();
@@ -114,6 +123,50 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
     {
         try { _accumulator.FeedLine(line); } catch { }
         RefreshTelemetrySnapshot();
+    }
+
+    public TransportKind SelectedTransport =>
+        string.Equals(Settings.Transport, "wifi", StringComparison.OrdinalIgnoreCase) ? TransportKind.Wifi : TransportKind.Usb;
+
+    /// <summary>Explicit transport selection. Never automatic — UI calls this from a user gesture.</summary>
+    public Task SwitchTransportAsync(TransportKind kind)
+    {
+        Settings.Transport = kind == TransportKind.Wifi ? "wifi" : "usb";
+        SaveSettings();
+        Log.Log(LogLevel.Info, "transport", $"Transport explicitly switched to {Settings.Transport} by user. No auto-fallback is ever performed.");
+        NotifyChanged();
+        return Task.CompletedTask;
+    }
+
+    public UsbDisplayState GetStateSnapshot()
+    {
+        var active = State == SystemState.Active;
+        var connected = _accumulator.Connected && Telemetry.StreamedFrames > 0;
+        SubsystemState Map(bool good, bool running)
+        {
+            if (State == SystemState.Error) return SubsystemState.Error;
+            if (active) return good ? SubsystemState.Healthy : SubsystemState.Warning;
+            if (State == SystemState.Starting) return SubsystemState.Starting;
+            if (State == SystemState.Stopping) return SubsystemState.Stopping;
+            if (running) return SubsystemState.Running;
+            return good ? SubsystemState.Ready : SubsystemState.Unknown;
+        }
+        var transport = SelectedTransport;
+        return new UsbDisplayState(
+            State,
+            Driver == null ? SubsystemState.Unknown : Driver.Loaded ? SubsystemState.Healthy : Driver.PackageInstalled ? SubsystemState.Warning : SubsystemState.NotInstalled,
+            Driver?.MonitorPresent == true ? SubsystemState.Healthy : SubsystemState.Unavailable,
+            active && connected ? SubsystemState.Healthy : active ? SubsystemState.Warning : SubsystemState.Ready,
+            active && connected ? SubsystemState.Healthy : active ? SubsystemState.Warning : SubsystemState.Ready,
+            active ? (connected ? SubsystemState.Healthy : SubsystemState.Warning) : Map(transport == TransportKind.Usb ? Devices.Any(d => d.State == AdbDeviceState.Device) : !string.IsNullOrWhiteSpace(Settings.DeviceIp), false),
+            transport == TransportKind.Usb
+                ? Map(Devices.Any(d => d.State == AdbDeviceState.Device), false)
+                : Map(!string.IsNullOrWhiteSpace(Settings.DeviceIp), false),
+            active ? (connected ? SubsystemState.Healthy : SubsystemState.Warning) : SubsystemState.Ready,
+            Telemetry.InputEventsInjected > 0 ? SubsystemState.Healthy : SubsystemState.Ready,
+            transport,
+            new[] { TransportKind.Usb, TransportKind.Wifi },
+            Telemetry, WifiLink, LastError, LastDiagnostics, DateTimeOffset.Now);
     }
 
     public async Task RefreshAllAsync(CancellationToken ct = default)
@@ -169,10 +222,25 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
             Step("Streamer binary found", done: true);
 
             var s = Settings;
+            string? usbSerial = null;
             if (s.Transport == "wifi")
             {
-                if (string.IsNullOrWhiteSpace(s.DeviceIp)) throw new FriendlyException("WiFi needs a device IP.", "Enter the tablet IP (or QR JSON) in Settings → Transport.");
-                Step($"Tablet target: {s.DeviceIp} (WiFi TLS)", done: true);
+                if (string.IsNullOrWhiteSpace(s.DeviceIp)) throw new FriendlyException("Tablet connection failed.", "Wi-Fi needs a device IP.", "transport=wifi device_ip=<empty>", "Enter the tablet LAN IP (or QR JSON) in Device → Wi-Fi Pairing.");
+                WifiPairPayload payload;
+                try { payload = WifiPairPayload.Parse(s.DeviceIp.Trim(), s.WifiPort > 0 ? s.WifiPort : 27184); }
+                catch (Exception ex) { throw new FriendlyException("Tablet connection failed.", $"Unparseable Wi-Fi target: {ex.Message}", $"transport=wifi device_ip={s.DeviceIp}", "Use a bare IP, ip:port, or the tablet QR JSON."); }
+                if (!string.IsNullOrWhiteSpace(payload.Fingerprint) && !FingerprintUtil.IsValid(payload.Fingerprint))
+                    throw new FriendlyException("Tablet connection failed.", $"Malformed fingerprint in QR: {payload.Fingerprint}", $"wifi_fingerprint={payload.Fingerprint}", "Re-scan the tablet pair screen QR.");
+                if (!string.IsNullOrWhiteSpace(s.Pin) && !FingerprintUtil.IsValidPin(s.Pin))
+                    throw new FriendlyException("Pairing PIN invalid.", "The PIN is six digits.", $"pin_len={s.Pin.Trim().Length}", "Re-read the current PIN on the tablet Wi-Fi pair screen.");
+                // Pre-flight reachability (TCP). TLS handshake + PIN/trust happen in the streamer.
+                var pre = await _preflight.CheckAsync(token).ConfigureAwait(false);
+                if (pre.State == SubsystemState.Disconnected)
+                    throw new FriendlyException("Tablet connection failed.", $"The Android listener did not establish a connection: {pre.Detail}", $"transport=wifi peer={payload.Ip}:{payload.Port}", $"{pre.LastError} [ Retry Wi-Fi ] [ Switch to USB ] — the app never switches automatically.");
+                if (pre.State == SubsystemState.Error)
+                    throw new FriendlyException("Connection refused.", pre.Detail, $"transport=wifi peer={payload.Ip}:{payload.Port}", $"{pre.LastError} [ View Details ] [ Forget Trust ] — changed certificates are never accepted silently.");
+                Step($"Tablet target: {payload.Ip}:{payload.Port} (Wi-Fi TLS 1.3) — {pre.Detail}", done: true);
+                Step("Certificate/PIN pre-check passed (TLS handshake runs in streamer)", done: true);
             }
             else
             {
@@ -182,13 +250,44 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
                 if (dev == null)
                 {
                     var unauth = devs.FirstOrDefault();
+                    var detail = unauth == null ? "adb_serial=<none>" : $"adb_serial={unauth.Serial} adb_state={unauth.State}";
                     throw new FriendlyException(
+                        "Tablet connection failed.",
                         unauth == null ? "No Android device visible to adb." : $"Device {unauth.Serial} is {unauth.State}.",
+                        $"transport=usb {detail} adb_forward=tcp:{s.UsbPort}",
                         unauth?.State == AdbDeviceState.Unauthorized
-                            ? "Unlock the tablet and accept the USB debugging prompt."
-                            : "Connect the tablet over USB with USB debugging enabled.");
+                            ? "Unlock the tablet and accept the USB debugging prompt. [ Retry USB ] [ Switch to Wi-Fi ]"
+                            : "Connect the tablet over USB with USB debugging enabled. A paired Wi-Fi tablet can be used via [ Switch to Wi-Fi ].");
                 }
+                usbSerial = dev.Serial;
                 Step($"Android device: {dev.Serial}", done: true);
+                // ADB forward lifecycle: purge stale, create/verify ours.
+                try { await _adb.RemoveStaleForwardsAsync(s.UsbPort, token).ConfigureAwait(false); } catch { }
+                var fwd = await _adb.EnsureForwardAsync(s.UsbPort, dev.Serial, token).ConfigureAwait(false);
+                if (!fwd.Ok)
+                    throw new FriendlyException("Tablet connection failed.", $"ADB forward failed: {fwd.Detail}", $"transport=usb adb_serial={dev.Serial} adb_forward=tcp:{s.UsbPort} FAILED", $"{fwd.Remediation} [ Retry USB ] [ Switch to Wi-Fi ]");
+                Step($"ADB forward verified ({fwd.Detail})", done: true);
+            }
+
+            // Legacy disk handoff hygiene: drop stale BMPs predating this
+            // session so an aborted run can never flood storage. Age-gated —
+            // never touches frames the streamer could still consume.
+            if (s.AutoPurgeCapture)
+            {
+                try
+                {
+                    var purged = CaptureMonitor.PurgeOlderThan(
+                        TimeSpan.FromSeconds(Math.Max(60, s.CapturePurgeAgeSeconds)));
+                    if (purged.DeletedFiles > 0)
+                    {
+                        Log.Log(LogLevel.Info, "capture",
+                            $"Purged {purged.DeletedFiles} stale frame(s) ({purged.DeletedBytes / 1024} KB).");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Log(LogLevel.Debug, "capture", $"Pre-start purge skipped: {ex.Message}");
+                }
             }
 
             _accumulator = new StreamTelemetryAccumulator();
@@ -197,7 +296,8 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
                 s.Transport == "wifi" ? TransportKind.Wifi : TransportKind.Usb,
                 s.Codec, s.BitrateBps, s.Fps, s.Gop, s.UsbPort,
                 null, string.IsNullOrWhiteSpace(s.DeviceIp) ? null : s.DeviceIp,
-                null, Live: true, Loop: true);
+                string.IsNullOrWhiteSpace(s.Pin) ? null : s.Pin,
+                Live: true, Loop: true);
             var session = _streamer.StartStream(options, OnStreamerOut, OnStreamerErr);
             _session = session;
             session.Exited += OnSessionExited;
@@ -214,6 +314,7 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
             Step("Transport process started", done: true);
 
             // Health-verified ACTIVE: connection + increasing frame count.
+            // ACTIVE is never set from process liveness alone.
             var deadline = DateTimeOffset.Now.Add(_firstFrameTimeout);
             long lastFrames = -1;
             var framesSeen = false;
@@ -222,7 +323,10 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
                 token.ThrowIfCancellationRequested();
                 if (_session == null || _session.HasExited)
                 {
-                    throw new FriendlyException("Streamer exited during startup.", "See Logs; run Diagnostics.");
+                    throw new FriendlyException("Streamer stopped unexpectedly.",
+                        "The transport process exited before the first verified frame.",
+                        $"transport={s.Transport} streamer_pid={_session?.Pid ?? -1}",
+                        "See Logs; run Diagnostics. [ Retry ] [ View Logs ] [ Run Diagnostics ]");
                 }
                 var snap = _accumulator.Snapshot();
                 if (_accumulator.Connected && snap.StreamedFrames > lastFrames && snap.StreamedFrames > 0)
@@ -235,13 +339,22 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
             }
             if (!framesSeen)
             {
-                throw new FriendlyException("No frames received within 45 s.", "Check capture dir, encoder backend in Logs, and tablet screen.");
+                var tech = s.Transport == "wifi"
+                    ? $"transport=wifi peer={s.DeviceIp} android_connection=not_established streamed_frames={lastFrames}"
+                    : $"transport=usb adb_serial={usbSerial ?? "<none>"} adb_forward=tcp:{s.UsbPort} android_connection=not_established streamed_frames={lastFrames}";
+                var remedy = s.Transport == "wifi"
+                    ? "Check the tablet screen, firewall for port 27184, and encoder backend in Logs. [ Retry Wi-Fi ] [ Switch to USB ] [ Run Diagnostics ]"
+                    : "Check capture dir, encoder backend in Logs, and tablet screen. [ Retry USB ] [ Switch to Wi-Fi ] [ Run Diagnostics ]";
+                throw new FriendlyException("Tablet connection failed.",
+                    "The Android listener did not establish a connection within the configured timeout (max 45 s first frame).",
+                    tech, remedy);
             }
             Step("First frames received — USB DISPLAY ACTIVE", done: true);
             State = SystemState.Active;
             StatusMessage = "USB DISPLAY ACTIVE";
             Health = HealthState.Healthy;
-            Log.Log(LogLevel.Info, "orchestrator", "System ACTIVE (verified).");
+            LastError = null;
+            Log.Log(LogLevel.Info, "orchestrator", "System ACTIVE (verified connection + increasing frames).");
             _pollTimer.Start();
             _telemetryTimer.Start();
         }
@@ -251,11 +364,11 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
         }
         catch (FriendlyException ex)
         {
-            Fail(ex.Message, ex.Remediation);
+            Fail(ex.Message, ex.Explanation, ex.TechnicalDetail, ex.Remediation);
         }
         catch (Exception ex)
         {
-            Fail($"Start failed: {ex.Message}", "See Logs; run Diagnostics.");
+            Fail("Start failed.", ex.Message, $"transport={Settings.Transport} detail={ex.GetType().Name}", "See Logs; run Diagnostics. [ Retry ] [ View Logs ]");
         }
         NotifyChanged();
     }
@@ -371,6 +484,8 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
     {
         _pollTimer.Stop();
         _telemetryTimer.Stop();
+        var wasUsb = SelectedTransport == TransportKind.Usb;
+        var usbPort = Settings.UsbPort;
         try
         {
             if (_session != null)
@@ -384,18 +499,32 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
         catch { }
         _processes.Untrack("streamer");
         _accumulator.MarkDisconnected();
+        // Session stop removes our ADB forward; the driver stays installed.
+        if (wasUsb)
+        {
+            try
+            {
+                await _adb.RemoveForwardAsync(usbPort).ConfigureAwait(false);
+                Log.Log(LogLevel.Info, "transport", $"ADB forward tcp:{usbPort} removed (session stop; driver untouched).");
+            }
+            catch (Exception ex) { Log.Log(LogLevel.Debug, "transport", $"Forward cleanup skipped: {ex.Message}"); }
+        }
+        WifiLink = null;
         State = SystemState.Stopped;
         StatusMessage = message;
         EvaluateHealth();
         await RefreshAllAsync().ConfigureAwait(false);
     }
 
-    private void Fail(string message, string? remediation)
+    private void Fail(string userMessage, string? explanation, string? technicalDetail = null, string? remediation = null)
     {
         State = SystemState.Error;
-        StatusMessage = message;
+        StatusMessage = userMessage;
         Health = HealthState.Error;
-        Log.Log(LogLevel.Error, "orchestrator", remediation == null ? message : $"{message} {remediation}");
+        LastError = new ErrorReport(userMessage, explanation ?? userMessage,
+            technicalDetail ?? $"transport={Settings.Transport} state=Error", remediation, DateTimeOffset.Now);
+        Log.Log(LogLevel.Error, "orchestrator",
+            remediation == null ? $"{userMessage} {explanation}" : $"{userMessage} {explanation} {remediation} [{technicalDetail}]");
         try
         {
             if (_session != null)
@@ -448,6 +577,10 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
             State = SystemState.Error;
             StatusMessage = $"Streamer crashed {n} times; auto-restart paused. See Logs.";
             Health = HealthState.Error;
+            LastError = new ErrorReport("Streamer failed repeatedly.",
+                "Automatic restart paused after 3 bounded attempts.",
+                $"transport={Settings.Transport} streamer_crashes={n}",
+                "[ Retry ] [ View Logs ] [ Run Diagnostics ]", DateTimeOffset.Now);
             NotifyChanged();
         }
     }
@@ -469,9 +602,30 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
         try
         {
             Telemetry = _accumulator.Snapshot();
+            WifiLink = SelectedTransport == TransportKind.Wifi ? BuildWifiLink() : null;
             NotifyChanged();
         }
         catch { }
+    }
+
+    private WifiLinkInfo BuildWifiLink()
+    {
+        var store = new WifiTrustStore();
+        string? ip = null;
+        try
+        {
+            var raw = (Settings.DeviceIp ?? "").Trim();
+            if (!string.IsNullOrWhiteSpace(raw)) ip = WifiPairPayload.Parse(raw, Settings.WifiPort > 0 ? Settings.WifiPort : 27184).Ip;
+        }
+        catch { }
+        var trusted = ip != null ? store.FindByIp(ip) : null;
+        var fp = !string.IsNullOrWhiteSpace(_accumulator.WifiFingerprint) ? _accumulator.WifiFingerprint
+            : trusted?.Fingerprint;
+        return new WifiLinkInfo(
+            string.IsNullOrWhiteSpace(_accumulator.WifiPeer) ? (ip != null ? $"{ip}:{Settings.WifiPort}" : null) : _accumulator.WifiPeer,
+            string.IsNullOrWhiteSpace(_accumulator.WifiEncryption) ? "TLS 1.3" : _accumulator.WifiEncryption,
+            fp, trusted != null, HostIdentity.StableHostId(),
+            false, Telemetry.BitrateBps, _accumulator.Adaptation, null, Telemetry.Reconnects);
     }
 
     private void EvaluateHealth()
@@ -535,9 +689,19 @@ public sealed class RealUsbDisplayGateway : IUsbDisplayGateway, IDisposable
 
 public sealed class FriendlyException : Exception
 {
+    public string? Explanation { get; }
+    public string? TechnicalDetail { get; }
     public string? Remediation { get; }
     public FriendlyException(string message, string? remediation = null) : base(message)
     {
+        Explanation = remediation;
+        Remediation = remediation;
+    }
+    public FriendlyException(string userMessage, string explanation, string technicalDetail, string? remediation = null)
+        : base(userMessage)
+    {
+        Explanation = explanation;
+        TechnicalDetail = technicalDetail;
         Remediation = remediation;
     }
 }

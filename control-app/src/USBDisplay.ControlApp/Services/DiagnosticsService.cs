@@ -165,10 +165,104 @@ public sealed class DiagnosticsService : IDiagnosticsService
             catch (Exception ex) { return (false, ex.Message, (string?)null); }
         }).ConfigureAwait(false);
 
+        await Add("Capture folder bounded", () =>
+        {
+            var warnMb = _config.Settings.CaptureWarnMb;
+            var status = CaptureMonitor.GetStatus();
+            var mb = status.TotalBytes / (1024.0 * 1024.0);
+            if (mb > warnMb)
+            {
+                return Task.FromResult<(bool, string, string?)>((false,
+                    $"{status.FileCount} stale frame(s), {mb:F1} MB (budget {warnMb} MB).",
+                    "Display page → Purge stale frames; check nothing unexpected is writing BMPs there."));
+            }
+            return Task.FromResult<(bool, string, string?)>((true,
+                status.FileCount == 0
+                    ? "Empty — the in-memory driver writes nothing to disk."
+                    : $"{status.FileCount} file(s), {mb:F1} MB within budget.",
+                null));
+        }).ConfigureAwait(false);
+
         await Add("WiFi pairing store", () => Task.FromResult<(bool, string, string?)>(
             File.Exists(PairedJson())
                 ? (true, PairedJson(), null)
                 : (true, "No pairings yet (normal before first WiFi use).", null))).ConfigureAwait(false);
+
+        await Add("USB forward tcp:27183", async () =>
+        {
+            if (!_adb.Available) return (false, "Skipped: no adb.", (string?)null);
+            try
+            {
+                var forwards = await _adb.ListForwardsAsync(ct).ConfigureAwait(false);
+                var want = $"tcp:{_config.Settings.UsbPort}";
+                var match = System.Linq.Enumerable.FirstOrDefault(forwards, f => f.LocalSpec == want);
+                // Forward absent while stopped is normal — report N/A as pass-with-note.
+                return match != null
+                    ? (true, $"{match.Serial} {match.LocalSpec}->{match.RemoteSpec}.", null)
+                    : (true, $"No forward for {want} (normal while stopped; created on Start).", null);
+            }
+            catch (Exception ex) { return (false, ex.Message, (string?)null); }
+        }).ConfigureAwait(false);
+
+        await Add("Wi-Fi device target", () =>
+        {
+            var raw = (_config.Settings.DeviceIp ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+                return Task.FromResult<(bool, string, string?)>((true, "No Wi-Fi target configured (normal for USB-only use).", null));
+            try
+            {
+                var payload = WifiPairPayload.Parse(raw, _config.Settings.WifiPort);
+                return Task.FromResult<(bool, string, string?)>((true, $"{payload.Ip}:{payload.Port}" + (payload.Fingerprint != null ? $" fp={FingerprintUtil.Short(payload.Fingerprint)}" : ""), null));
+            }
+            catch (Exception ex) { return Task.FromResult<(bool, string, string?)>((false, ex.Message, "Use a bare IP, ip:port, or the tablet QR JSON.")); }
+        }).ConfigureAwait(false);
+
+        await Add("Wi-Fi reachable + TLS trust", async () =>
+        {
+            var raw = (_config.Settings.DeviceIp ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(raw)) return (true, "Skipped: no Wi-Fi target.", (string?)null);
+            WifiPairPayload payload;
+            try { payload = WifiPairPayload.Parse(raw, _config.Settings.WifiPort); }
+            catch (Exception ex) { return (false, ex.Message, (string?)null); }
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                var connect = client.ConnectAsync(payload.Ip, payload.Port);
+                var done = await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(5), ct)).ConfigureAwait(false);
+                if (done != connect || !client.Connected)
+                    return (false, $"Host {payload.Ip}:{payload.Port} unreachable.",
+                        "The network may be AP-isolated or the host unreachable. Use USB to connect this tablet.");
+            }
+            catch (Exception) { return (false, $"Host {payload.Ip}:{payload.Port} unreachable.", "The network may be AP-isolated. Use USB."); }
+            // Fingerprint vs trust.
+            var store = new WifiTrustStore();
+            var trusted = store.FindByIp(payload.Ip);
+            if (!string.IsNullOrWhiteSpace(payload.Fingerprint))
+            {
+                if (!FingerprintUtil.IsValid(payload.Fingerprint))
+                    return (false, $"Malformed fingerprint: {payload.Fingerprint}", "Re-scan the tablet pair screen QR.");
+                if (trusted != null && !string.Equals(trusted.Fingerprint, payload.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                    return (false, $"Fingerprint mismatch. Expected {trusted.Fingerprint}, received {payload.Fingerprint}.",
+                        "Forget the existing pairing and pair the tablet again. Changed certificates are never accepted silently.");
+                return (true, $"Reachable; fp={FingerprintUtil.Short(payload.Fingerprint)}; TLS 1.3 enforced.", null);
+            }
+            return trusted != null
+                ? (true, $"Reachable; trusted host; fp={FingerprintUtil.Short(trusted.Fingerprint)}.", null)
+                : (true, "Reachable. Pair once with the 6-digit PIN; later reconnects skip the PIN (fingerprint still enforced).", null);
+        }).ConfigureAwait(false);
+
+        await Add("Protocol framing (USBD/USBT v1)", async () =>
+        {
+            if (!_streamer.Available) return (false, "Skipped: no streamer binary.", (string?)null);
+            try
+            {
+                var r = await _streamer.TransportProbeAsync(ct).ConfigureAwait(false);
+                return r.ExitCode == 0
+                    ? (true, FirstLine(r.StdOut), null)
+                    : (false, FirstLine(r.StdErr), (string?)null);
+            }
+            catch (Exception ex) { return (false, ex.Message, (string?)null); }
+        }).ConfigureAwait(false);
 
         return results;
     }

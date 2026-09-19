@@ -1,7 +1,9 @@
-﻿<Application x:Class="USBDisplay.ControlApp.App"
+﻿<!-- NOTE: no StartupUri — App.OnStartup creates MainWindow(MainViewModel)
+     manually. A StartupUri would make WPF construct MainWindow with a
+     nonexistent default ctor and crash at startup (XamlParseException). -->
+<Application x:Class="USBDisplay.ControlApp.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="UI/MainWindow.xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Application.Resources>
     <Color x:Key="BgColor">#14171C</Color>
     <Color x:Key="CardColor">#1D222A</Color>

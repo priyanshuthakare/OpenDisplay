@@ -17,7 +17,15 @@ public interface IAdbClient
     Task RestartServerAsync(CancellationToken ct = default);
     Task InstallApkAsync(string apkPath, CancellationToken ct = default);
     Task LaunchAppAsync(string package, CancellationToken ct = default);
+    Task<IReadOnlyList<AdbForward>> ListForwardsAsync(CancellationToken ct = default);
+    Task<ForwardResult> EnsureForwardAsync(int port, string? serial = null, CancellationToken ct = default);
+    Task RemoveForwardAsync(int port, string? serial = null, CancellationToken ct = default);
+    Task<int> RemoveStaleForwardsAsync(int port, CancellationToken ct = default);
 }
+
+public sealed record AdbForward(string Serial, string LocalSpec, string RemoteSpec);
+
+public sealed record ForwardResult(bool Ok, string Detail, string? Remediation);
 
 public sealed class AdbClient : IAdbClient
 {
@@ -75,6 +83,80 @@ public sealed class AdbClient : IAdbClient
         {
             throw new InvalidOperationException($"adb launch failed: {result.StdErr.Trim()}");
         }
+    }
+
+    /// <summary>Lists active forwards via <c>adb forward --list</c> (serial local remote per line).</summary>
+    public async Task<IReadOnlyList<AdbForward>> ListForwardsAsync(CancellationToken ct = default)
+    {
+        var result = await _runner.RunAsync(ExePath, new[] { "forward", "--list" }, null, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+        var list = new List<AdbForward>();
+        if (result.ExitCode != 0) return list;
+        foreach (var raw in result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = raw.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 3) list.Add(new AdbForward(parts[0], parts[1], parts[2]));
+        }
+        return list;
+    }
+
+    /// <summary>Verifies tcp:port forward; creates it if missing. Detects stale forwards for other serials.</summary>
+    public async Task<ForwardResult> EnsureForwardAsync(int port, string? serial = null, CancellationToken ct = default)
+    {
+        var want = $"tcp:{port}";
+        IReadOnlyList<AdbForward> forwards;
+        try { forwards = await ListForwardsAsync(ct).ConfigureAwait(false); }
+        catch (Exception ex) { return new ForwardResult(false, $"Could not list adb forwards: {ex.Message}", "Check the USB cable and run adb reconnect from the Device page."); }
+        var match = System.Linq.Enumerable.FirstOrDefault(forwards,
+            f => f.LocalSpec == want && (serial == null || f.Serial == serial));
+        if (match != null)
+            return new ForwardResult(true, $"adb forward {want}->{match.RemoteSpec} verified for {match.Serial}.", null);
+        // Remove stale forwards on the same local port owned by other serials before recreating.
+        foreach (var stale in System.Linq.Enumerable.Where(forwards, f => f.LocalSpec == want))
+        {
+            try { await RemoveForwardSpecAsync(stale.Serial, stale.LocalSpec, ct).ConfigureAwait(false); } catch { }
+        }
+        var args = serial != null
+            ? new[] { "-s", serial, "forward", want, want }
+            : new[] { "forward", want, want };
+        var result = await _runner.RunAsync(ExePath, args, null, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+            return new ForwardResult(false, $"adb forward failed: {(result.StdOut + result.StdErr).Trim()}", "Reconnect the tablet; if the port is held by another app, free tcp:27183 and retry.");
+        return new ForwardResult(true, $"adb forward {want}->{want} created.", null);
+    }
+
+    public async Task RemoveForwardAsync(int port, string? serial = null, CancellationToken ct = default)
+    {
+        var want = $"tcp:{port}";
+        var forwards = await ListForwardsAsync(ct).ConfigureAwait(false);
+        foreach (var f in forwards)
+        {
+            if (f.LocalSpec != want) continue;
+            if (serial != null && f.Serial != serial) continue;
+            try { await RemoveForwardSpecAsync(f.Serial, f.LocalSpec, ct).ConfigureAwait(false); } catch { }
+        }
+    }
+
+    public async Task<int> RemoveStaleForwardsAsync(int port, CancellationToken ct = default)
+    {
+        // Stale = forward on our port whose device serial is no longer visible.
+        var removed = 0;
+        IReadOnlyList<DeviceInfo> devices;
+        try { devices = await ListDevicesAsync(ct).ConfigureAwait(false); }
+        catch { return 0; }
+        var live = new HashSet<string>(System.Linq.Enumerable.Select(devices, d => d.Serial), StringComparer.Ordinal);
+        var forwards = await ListForwardsAsync(ct).ConfigureAwait(false);
+        foreach (var f in forwards)
+        {
+            if (f.LocalSpec != $"tcp:{port}") continue;
+            if (live.Contains(f.Serial)) continue;
+            try { await RemoveForwardSpecAsync(f.Serial, f.LocalSpec, ct).ConfigureAwait(false); removed++; } catch { }
+        }
+        return removed;
+    }
+
+    private async Task RemoveForwardSpecAsync(string serial, string localSpec, CancellationToken ct)
+    {
+        await _runner.RunAsync(ExePath, new[] { "-s", serial, "forward", "--remove", localSpec }, null, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
     }
 
     private string ResolveExe()

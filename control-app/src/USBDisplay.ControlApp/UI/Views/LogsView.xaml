@@ -5,6 +5,7 @@
     <DockPanel>
       <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
         <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding LevelFilter, Mode=TwoWay}" Width="110" Margin="0,0,8,0"/>
+        <ComboBox ItemsSource="{Binding Subsystems}" SelectedItem="{Binding SubsystemFilter, Mode=TwoWay}" Width="140" Margin="0,0,8,0"/>
         <TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Width="220" Margin="0,0,8,0"/>
         <Button Content="{Binding PauseLabel}" Command="{Binding Pause}"/>
         <Button Content="Clear" Command="{Binding Clear}"/>

@@ -113,6 +113,7 @@ enum Command {
         #[arg(long)]
         device_ip: Option<String>,
         /// WiFi pairing PIN shown on the tablet. Only used with --transport wifi.
+        /// May be omitted on reconnect from an already-trusted host.
         #[arg(long)]
         pin: Option<String>,
         /// Print streaming stats as JSON every 60 frames.

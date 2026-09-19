@@ -55,6 +55,21 @@ Both listeners can run side by side during development.
 `host_id` is `host-<COMPUTERNAME>` (stable, not PID) so second connects skip PIN.
 `Rotate PIN` regenerates; `Forget hosts` clears trusted set.
 
+## Scan-to-trust (PC shows QR, tablet scans)
+
+Reverse-direction pairing for users who prefer it (also what the Windows
+control app offers via Dashboard → Show pairing code):
+
+1. PC: show pairing code — a QR encoding `{"v":1,"host_id":"host-<pc>"}`.
+   The C# `HostIdentity` scheme mirrors Rust `pairing::stable_host_id`
+   exactly; keep them in lockstep or trust silently stops matching.
+2. Tablet: WiFi Pair → **Scan PC code** (Camera2 + bundled ZXing-core
+   decoder, runtime CAMERA permission). A valid scan adds the `host_id` to
+   the trusted set — physical proximity is the authorization.
+3. PC connects with an empty PIN; the tablet skips the PIN check for the
+   trusted id (TLS fingerprint still enforced). No protocol change was
+   needed: trust is the same `host_id` set the PIN flow writes to.
+
 ## TLS / PIN design
 
 - **Cert**: ECDSA P-256, self-signed, 10-year validity, `CN=USBDisplay-Tablet`.

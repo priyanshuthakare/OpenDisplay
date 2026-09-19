@@ -49,6 +49,9 @@ public partial class SignalMonitor : UserControl
         set => SetValue(IsActiveProperty, value);
     }
 
+    /// <summary>Raised when a pipeline node is clicked — host navigates to its diagnostics.</summary>
+    public event EventHandler<string>? NodeClicked;
+
     private Ellipse? _packet;
 
     private void Render()
@@ -92,7 +95,11 @@ public partial class SignalMonitor : UserControl
             {
                 Width = 16, Height = 16, Fill = brush,
                 Opacity = nodes[i].State == ComponentState.Stopped || nodes[i].State == ComponentState.Unknown ? 0.35 : 1,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = $"{nodes[i].Name}: {nodes[i].Detail} — click for diagnostics",
             };
+            var nodeName = nodes[i].Name;
+            dot.MouseLeftButtonUp += (_, _) => NodeClicked?.Invoke(this, nodeName);
             Canvas.SetLeft(dot, cx - 8);
             Canvas.SetTop(dot, y - 8);
             Stage.Children.Add(dot);

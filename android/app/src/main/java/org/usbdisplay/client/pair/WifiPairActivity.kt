@@ -7,8 +7,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import org.usbdisplay.client.R
-
-private const val WIFI_STREAM_PORT = 27184
+import org.usbdisplay.client.WIFI_STREAM_PORT
 
 /**
  * WiFi pairing screen (PR-3): tablet LAN IP, TLS fingerprint, 6-digit PIN,
@@ -23,6 +22,8 @@ class WifiPairActivity : Activity() {
     private lateinit var qrImageView: ImageView
     private lateinit var rotateButton: Button
     private lateinit var forgetButton: Button
+    private lateinit var scanButton: Button
+    private lateinit var newCertButton: Button
     private lateinit var identity: TabletIdentity
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,8 +37,15 @@ class WifiPairActivity : Activity() {
         qrImageView = findViewById(R.id.qr_image)
         rotateButton = findViewById(R.id.rotate_button)
         forgetButton = findViewById(R.id.forget_button)
+        scanButton = findViewById(R.id.scan_button)
+        newCertButton = findViewById(R.id.new_cert_button)
 
         updatePairingInfo()
+
+        scanButton.setOnClickListener {
+            startActivity(android.content.Intent(this, ScanPcActivity::class.java))
+        }
+        newCertButton.setOnClickListener { confirmRotateCertificate() }
 
         rotateButton.setOnClickListener {
             identity.rotatePin()
@@ -53,6 +61,37 @@ class WifiPairActivity : Activity() {
     override fun onResume() {
         super.onResume()
         updatePairingInfo()
+    }
+
+    /**
+     * Rotating the certificate changes the fingerprint, so every paired PC
+     * must scan the new QR (and re-enter the PIN): rotation resets all
+     * pairings, which is also what docs/wifi.md promises.
+     */
+    private fun confirmRotateCertificate() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("New certificate?")
+            .setMessage(
+                "This generates a new tablet identity. Paired PCs will reject " +
+                    "the old fingerprint and must scan the new QR and re-enter " +
+                    "the PIN. Continue?",
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Rotate") { _, _ ->
+                try {
+                    identity.regenerateCert()
+                    identity.clearTrusted()
+                    updatePairingInfo()
+                    Toast.makeText(
+                        this,
+                        "Certificate rotated — paired PCs must scan the new QR.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Rotation failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+            .show()
     }
 
     private fun updatePairingInfo() {

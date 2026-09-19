@@ -46,6 +46,10 @@ public sealed class MockUsbDisplayGateway : IUsbDisplayGateway, IDisposable
     public string StatusMessage { get; private set; } = "Stopped (demo).";
     public IReadOnlyList<StartupStep> StartupSteps { get; private set; } = Array.Empty<StartupStep>();
     public StreamTelemetry Telemetry { get; private set; } = DemoTelemetry(0);
+    public WifiLinkInfo? WifiLink => Settings.Transport == "wifi"
+        ? new WifiLinkInfo("192.168.1.42:27184 (demo)", "TLS 1.3 (demo)", "SHA256:demo", true, "host-demo", true, 12_000_000, "Stable (demo)", null, 0)
+        : null;
+    public ErrorReport? LastError => null;
     public DriverInfo? Driver { get; private set; }
     public IReadOnlyList<DisplayInfo> Displays { get; private set; }
     public IReadOnlyList<DeviceInfo> Devices { get; private set; }
@@ -60,6 +64,19 @@ public sealed class MockUsbDisplayGateway : IUsbDisplayGateway, IDisposable
 
     public event EventHandler? Changed;
     public void NotifyChanged() => Changed?.Invoke(this, EventArgs.Empty);
+
+    public UsbDisplayState GetStateSnapshot() => UsbDisplayState.Empty(Telemetry) with
+    {
+        OverallState = State,
+        SelectedTransport = Settings.Transport == "wifi" ? TransportKind.Wifi : TransportKind.Usb,
+    };
+
+    public Task SwitchTransportAsync(TransportKind kind)
+    {
+        Settings.Transport = kind == TransportKind.Wifi ? "wifi" : "usb";
+        NotifyChanged();
+        return Task.CompletedTask;
+    }
 
     public Task RefreshAllAsync(CancellationToken ct = default)
     {

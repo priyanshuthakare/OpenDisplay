@@ -28,8 +28,44 @@
           <TextBlock Text="Tablet IP / QR JSON:" Width="150" VerticalAlignment="Center"/>
           <TextBox Text="{Binding Settings.DeviceIp, UpdateSourceTrigger=PropertyChanged}" Width="300"/>
         </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+          <TextBlock Text="Pairing PIN:" Width="150" VerticalAlignment="Center"/>
+          <TextBox Text="{Binding Settings.Pin, UpdateSourceTrigger=PropertyChanged}" Width="140"/>
+          <TextBlock Text="6-digit code on the tablet pair screen. Omit on reconnect from a trusted host."
+                     Foreground="{StaticResource Dim}" VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
         <TextBlock Text="USB port (adb forward):" Margin="0,6,0,0"/>
         <TextBox Text="{Binding Settings.UsbPort}" Width="120" HorizontalAlignment="Left"/>
+        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+          <TextBlock Text="Wi-Fi port:" Width="150" VerticalAlignment="Center"/>
+          <TextBox Text="{Binding Settings.WifiPort}" Width="120"/>
+          <TextBlock Text="TLS 1.3 only, default 27184." Foreground="{StaticResource Dim}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+          <TextBlock Text="Connection timeout (s):" Width="150" VerticalAlignment="Center"/>
+          <TextBox Text="{Binding Settings.ConnectionTimeoutSeconds}" Width="120"/>
+          <TextBlock Text="First-frame timeout is 45 s per PRD." Foreground="{StaticResource Dim}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+    <Border Style="{StaticResource CardBorder}">
+      <StackPanel>
+        <TextBlock Text="DISPLAY" FontWeight="Bold" Margin="0,0,0,6"/>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="Preferred resolution:" Width="150" VerticalAlignment="Center"/>
+          <TextBox Text="{Binding Settings.PreferredResolution}" Width="140"/>
+          <TextBlock Text="Refresh (Hz):" Width="100" VerticalAlignment="Center" Margin="12,0,0,0"/>
+          <TextBox Text="{Binding Settings.PreferredRefreshHz}" Width="70"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+          <TextBlock Text="Topology:" Width="150" VerticalAlignment="Center"/>
+          <ComboBox Text="{Binding Settings.TopologyPreference}" Width="140">
+            <ComboBoxItem Content="Extend"/>
+            <ComboBoxItem Content="Duplicate"/>
+          </ComboBox>
+        </StackPanel>
+        <TextBlock Text="Applied via Windows Display Settings / DisplaySwitch. Only exposed where supported."
+                   Foreground="{StaticResource Dim}" Margin="0,4,0,0" TextWrapping="Wrap"/>
       </StackPanel>
     </Border>
     <Border Style="{StaticResource CardBorder}">
@@ -61,6 +97,22 @@
         <TextBox Text="{Binding Settings.AdbPath, UpdateSourceTrigger=PropertyChanged}"/>
         <TextBlock Text="Driver scripts dir (blank = auto-detect):" Foreground="{StaticResource Dim}" Margin="0,6,0,0"/>
         <TextBox Text="{Binding Settings.DriverScriptsDir, UpdateSourceTrigger=PropertyChanged}"/>
+        <TextBlock Text="DIAGNOSTICS" FontWeight="Bold" Margin="0,10,0,6"/>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="Log level:" Width="150" VerticalAlignment="Center"/>
+          <ComboBox Text="{Binding Settings.LogLevel}" Width="140">
+            <ComboBoxItem Content="Debug"/>
+            <ComboBoxItem Content="Info"/>
+            <ComboBoxItem Content="Warning"/>
+            <ComboBoxItem Content="Error"/>
+          </ComboBox>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+          <TextBlock Text="Log retention (days):" Width="150" VerticalAlignment="Center"/>
+          <TextBox Text="{Binding Settings.LogRetentionDays}" Width="120"/>
+        </StackPanel>
+        <TextBlock Text="Export location (blank = prompt each time):" Foreground="{StaticResource Dim}" Margin="0,6,0,0"/>
+        <TextBox Text="{Binding Settings.ExportLocation, UpdateSourceTrigger=PropertyChanged}"/>
         <Button Content="Save Settings" Style="{StaticResource PrimaryButton}" Command="{Binding Save}"
                 HorizontalAlignment="Left" Margin="0,10,0,0"/>
         <TextBlock Text="{Binding SavedNote}" Foreground="{StaticResource Accent}"/>

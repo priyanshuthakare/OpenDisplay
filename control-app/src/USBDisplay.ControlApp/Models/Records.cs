@@ -88,14 +88,25 @@ public sealed class AppSettings
     public int Fps { get; set; } = 60;
     public int Gop { get; set; } = 60;
     public int UsbPort { get; set; } = 27183;
+    public int WifiPort { get; set; } = 27184;
+    public int ConnectionTimeoutSeconds { get; set; } = 45;
     public string Transport { get; set; } = "usb";
     public string DeviceIp { get; set; } = "";
+    public string Pin { get; set; } = "";
+    public string PreferredResolution { get; set; } = "1920x1080";
+    public int PreferredRefreshHz { get; set; } = 60;
+    public string TopologyPreference { get; set; } = "Extend";
     public bool LaunchAtStartup { get; set; }
     public bool MinimizeToTray { get; set; } = true;
     public bool ConfirmBeforeStop { get; set; } = true;
     public bool ConfirmDestructive { get; set; } = true;
     public string LogLevel { get; set; } = "Info";
+    public int LogRetentionDays { get; set; } = 14;
+    public string ExportLocation { get; set; } = "";
     public bool DemoMode { get; set; }
+    public bool AutoPurgeCapture { get; set; } = true;
+    public int CapturePurgeAgeSeconds { get; set; } = 300;
+    public int CaptureWarnMb { get; set; } = 512;
     public bool FirstRunDone { get; set; }
     public bool AutoStartStreaming { get; set; }
     public int DevicePollSeconds { get; set; } = 5;

@@ -51,6 +51,7 @@ internal sealed class FakeSession : IStreamSession
 internal sealed class FakeStreamer : IStreamerCli
 {
     public FakeSession? LastSession;
+    public StreamStartOptions? LastOptions;
     public string ExePath => "fake-streamer.exe";
     public bool Available => true;
     public Task<IReadOnlyList<DeviceInfo>> GetDevicesAsync(CancellationToken ct = default) =>
@@ -63,6 +64,7 @@ internal sealed class FakeStreamer : IStreamerCli
         Task.FromResult(new ProcessResult(0, "transport_packets=1", ""));
     public IStreamSession StartStream(StreamStartOptions options, DataReceivedEventHandler onOut, DataReceivedEventHandler onErr)
     {
+        LastOptions = options;
         LastSession = new FakeSession();
         return LastSession;
     }
@@ -76,12 +78,26 @@ internal sealed class FakeAdb : IAdbClient
     {
         new DeviceInfo("FAKE123", AdbDeviceState.Device, "FakeTablet", "fake", "1"),
     };
+    public List<AdbForward> Forwards { get; set; } = new();
     public Task<IReadOnlyList<DeviceInfo>> ListDevicesAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<DeviceInfo>>(Devices);
     public Task ReconnectAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task RestartServerAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task InstallApkAsync(string apkPath, CancellationToken ct = default) => Task.CompletedTask;
     public Task LaunchAppAsync(string package, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<IReadOnlyList<AdbForward>> ListForwardsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<AdbForward>>(Forwards);
+    public Task<ForwardResult> EnsureForwardAsync(int port, string? serial = null, CancellationToken ct = default)
+    {
+        Forwards.Add(new AdbForward(serial ?? Devices.FirstOrDefault()?.Serial ?? "FAKE123", $"tcp:{port}", $"tcp:{port}"));
+        return Task.FromResult(new ForwardResult(true, "fake forward ok", null));
+    }
+    public Task RemoveForwardAsync(int port, string? serial = null, CancellationToken ct = default)
+    {
+        Forwards.RemoveAll(f => f.LocalSpec == $"tcp:{port}");
+        return Task.CompletedTask;
+    }
+    public Task<int> RemoveStaleForwardsAsync(int port, CancellationToken ct = default) => Task.FromResult(0);
 }
 
 internal sealed class FakeDisplays : IDisplayManager
@@ -102,6 +118,13 @@ internal sealed class FakeDiagnostics : IDiagnosticsService
         Task.FromResult<IReadOnlyList<DiagnosticResult>>(Array.Empty<DiagnosticResult>());
 }
 
+internal sealed class FakeWifiPreflight : Transport.IWifiPreflight
+{
+    public Transport.TransportStatus Result { get; set; } = new Transport.TransportStatus(
+        TransportKind.Wifi, SubsystemState.Connecting, "192.168.1.42:27184", "Reachable (fake).", null);
+    public Task<Transport.TransportStatus> CheckAsync(CancellationToken ct = default) => Task.FromResult(Result);
+}
+
 #endregion
 
 [TestClass]
@@ -109,7 +132,8 @@ public sealed class OrchestratorTests
 {
     private static (RealUsbDisplayGateway Gateway, FakeStreamer Streamer) Create(
         TimeSpan? firstFrameTimeout = null,
-        Action<FakeDriver, FakeAdb, FakeDisplays>? tweak = null)
+        Action<FakeDriver, FakeAdb, FakeDisplays>? tweak = null,
+        Transport.IWifiPreflight? preflight = null)
     {
         var path = Path.Combine(Path.GetTempPath(), $"usbdisplay-test-{Guid.NewGuid()}.json");
         var config = new ConfigurationService(path);
@@ -121,7 +145,7 @@ public sealed class OrchestratorTests
         var gateway = new RealUsbDisplayGateway(
             config, new FakeElevation(), driver, streamer, adb, displays,
             new ProcessManager(), new FakeDiagnostics(), new LogService(),
-            firstFrameTimeout ?? TimeSpan.FromSeconds(30));
+            firstFrameTimeout ?? TimeSpan.FromSeconds(30), preflight);
         return (gateway, streamer);
     }
 
@@ -161,7 +185,10 @@ public sealed class OrchestratorTests
         var (gateway, _) = Create(tweak: (_, adb, _) => adb.Devices.Clear());
         await gateway.StartAsync();
         Assert.AreEqual(SystemState.Error, gateway.State);
-        Assert.IsTrue(gateway.StatusMessage.Contains("No Android device"));
+        // User-facing layer names the failure; technical detail carries adb state.
+        Assert.AreEqual("Tablet connection failed.", gateway.StatusMessage);
+        Assert.IsNotNull(gateway.LastError);
+        StringAssert.Contains(gateway.LastError!.TechnicalDetail, "adb_serial");
     }
 
     [TestMethod]
@@ -171,6 +198,33 @@ public sealed class OrchestratorTests
         await gateway.StartAsync();
         // Session started (connection never established, no frames) → Error, never ACTIVE.
         Assert.AreEqual(SystemState.Error, gateway.State);
+    }
+
+    [TestMethod]
+    public async Task WifiStart_PassesPinDeviceIpAndTransport()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"usbdisplay-test-{Guid.NewGuid()}.json");
+        var config = new ConfigurationService(path);
+        config.Settings.Transport = "wifi";
+        config.Settings.DeviceIp = "192.168.1.42";
+        config.Settings.Pin = "123456";
+        var streamer = new FakeStreamer();
+        var gateway = new RealUsbDisplayGateway(
+            config, new FakeElevation(), new FakeDriver(), streamer, new FakeAdb(),
+            new FakeDisplays(), new ProcessManager(), new FakeDiagnostics(),
+            new LogService(), TimeSpan.FromSeconds(30), new FakeWifiPreflight());
+        var start = gateway.StartAsync();
+        gateway.TestFeedLine("android_connection=established");
+        gateway.TestFeedLine("{\"streamed_frames\":10,\"streamed_packets\":40,\"write_stall_ms_max\":1.0,\"input_events_injected\":0}");
+        gateway.TestFeedLine("{\"streamed_frames\":20,\"streamed_packets\":80,\"write_stall_ms_max\":1.0,\"input_events_injected\":0}");
+        await start;
+        Assert.AreEqual(SystemState.Active, gateway.State);
+        Assert.IsNotNull(streamer.LastOptions);
+        Assert.AreEqual(TransportKind.Wifi, streamer.LastOptions!.Transport);
+        Assert.AreEqual("192.168.1.42", streamer.LastOptions!.DeviceIp);
+        Assert.AreEqual("123456", streamer.LastOptions!.Pin);
+        await gateway.StopAsync();
+        try { File.Delete(path); } catch { }
     }
 
     [TestMethod]

@@ -29,5 +29,12 @@
         </StackPanel>
       </StackPanel>
     </Border>
+    <Border Style="{StaticResource CardBorder}">
+      <StackPanel>
+        <TextBlock Text="CAPTURE STORAGE" FontSize="14" FontWeight="Bold"/>
+        <TextBlock Text="{Binding CaptureNote}" TextWrapping="Wrap" Foreground="{StaticResource Dim}" Margin="0,4,0,8"/>
+        <Button Content="Purge stale frames" Command="{Binding PurgeCapture}" HorizontalAlignment="Left"/>
+      </StackPanel>
+    </Border>
   </StackPanel>
 </UserControl>
