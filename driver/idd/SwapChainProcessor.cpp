@@ -1,5 +1,5 @@
 #include "SwapChainProcessor.h"
-#include "FrameCapture.h"
+
 #include "Trace.h"
 
 #include <avrt.h>
@@ -7,58 +7,6 @@
 
 using Microsoft::WRL::ComPtr;
 
-
-namespace
-{
-    bool WriteBmp(const UsbDisplay::FrameCapturer& capture, unsigned long long sequence)
-    {
-        if (capture.Width() == 0 || capture.Height() == 0 || capture.Pixels().empty())
-            return false;
-
-        CreateDirectoryW(L"C:\\ProgramData\\USBDisplay", nullptr);
-        CreateDirectoryW(L"C:\\ProgramData\\USBDisplay\\capture", nullptr);
-
-        wchar_t path[256] = {};
-        wchar_t temp[256] = {};
-        swprintf_s(path, L"C:\\ProgramData\\USBDisplay\\capture\\capture_%016llX.bmp", sequence);
-        swprintf_s(temp, L"C:\\ProgramData\\USBDisplay\\capture\\capture_%016llX.tmp", sequence);
-
-        BITMAPFILEHEADER fileHeader = {};
-        BITMAPINFOHEADER infoHeader = {};
-        infoHeader.biSize = sizeof(infoHeader);
-        infoHeader.biWidth = static_cast<LONG>(capture.Width());
-        infoHeader.biHeight = -static_cast<LONG>(capture.Height());
-        infoHeader.biPlanes = 1;
-        infoHeader.biBitCount = 32;
-        infoHeader.biCompression = BI_RGB;
-        infoHeader.biSizeImage = static_cast<DWORD>(capture.Pixels().size() * sizeof(uint32_t));
-        fileHeader.bfType = 0x4D42;
-        fileHeader.bfOffBits = sizeof(fileHeader) + sizeof(infoHeader);
-        fileHeader.bfSize = fileHeader.bfOffBits + infoHeader.biSizeImage;
-
-        HANDLE file = CreateFileW(temp, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
-                                  FILE_ATTRIBUTE_TEMPORARY, nullptr);
-        if (file == INVALID_HANDLE_VALUE)
-            return false;
-
-        DWORD written = 0;
-        bool ok = WriteFile(file, &fileHeader, sizeof(fileHeader), &written, nullptr) &&
-                  written == sizeof(fileHeader);
-        ok = ok && WriteFile(file, &infoHeader, sizeof(infoHeader), &written, nullptr) &&
-             written == sizeof(infoHeader);
-        const auto bytes = capture.Pixels().size() * sizeof(uint32_t);
-        ok = ok && WriteFile(file, capture.Pixels().data(), static_cast<DWORD>(bytes), &written, nullptr) &&
-             written == bytes;
-        FlushFileBuffers(file);
-        CloseHandle(file);
-        if (!ok)
-        {
-            DeleteFileW(temp);
-            return false;
-        }
-        return MoveFileExW(temp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
-    }
-}
 
 namespace UsbDisplay
 {
@@ -193,7 +141,6 @@ namespace UsbDisplay
         }
 
         USBLOG_INFO(L"ProcessFrames: entering frame loop");
-        FrameCapturer capture(m_device->Device, m_device->Context);
         UINT64 frameCount = 0;
         LARGE_INTEGER freq = {}; QueryPerformanceFrequency(&freq);
         LARGE_INTEGER start = {}; QueryPerformanceCounter(&start);
@@ -234,13 +181,6 @@ namespace UsbDisplay
             {
                 USBLOG_INFO(L"AcquireFrame: frame %llu acquired (fps=%d.%d)",
                             frameCount, (int)fps, (int)(fps * 10) % 10);
-            }
-
-            ComPtr<ID3D11Texture2D> texture;
-            if (SUCCEEDED(surface.As(&texture)) && capture.Capture(texture.Get()))
-            {
-                if (!WriteBmp(capture, frameCount))
-                    USBLOG_WARN(L"ProcessFrames: failed to publish capture frame %llu", frameCount);
             }
 
             surface.Reset();
