@@ -127,11 +127,15 @@ public sealed class StreamerCli : IStreamerCli
         {
             if (string.IsNullOrWhiteSpace(o.DeviceIp)) throw new ArgumentException("WiFi transport needs --device-ip.");
             args.Add("--device-ip"); args.Add(o.DeviceIp);
-            if (!string.IsNullOrWhiteSpace(o.Pin)) { args.Add("--pin"); args.Add(o.Pin); }
         }
         if (!o.Live) args.Add("--no-live");
         if (o.Loop) args.Add("--loop");
-        var process = _runner.StartLongRunning(ExePath, args.ToArray(), null, onOut, onErr);
+        IReadOnlyDictionary<string, string?>? environment = null;
+        if (o.Transport == TransportKind.Wifi && !string.IsNullOrWhiteSpace(o.Pin))
+        {
+            environment = new Dictionary<string, string?> { ["USBDISPLAY_WIFI_PIN"] = o.Pin };
+        }
+        var process = _runner.StartLongRunning(ExePath, args.ToArray(), null, onOut, onErr, environment);
         return new StreamSession(process, $"{ExePath} {string.Join(" ", args)}");
     }
 

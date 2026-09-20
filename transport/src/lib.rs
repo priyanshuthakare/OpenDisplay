@@ -243,7 +243,7 @@ impl TransportPacket {
                 bytes: self.payload,
             })),
             PacketKind::Ack => {
-                if self.payload.len() < 8 || self.payload.len() % 8 != 0 {
+                if self.payload.len() < 8 || !self.payload.len().is_multiple_of(8) {
                     return Err(TransportError::InvalidAckPayload);
                 }
                 let through_packet_sequence = u64_at(&self.payload, 0);
@@ -290,15 +290,14 @@ impl Packetizer {
         Ok(fragments
             .into_iter()
             .map(|fragment| {
-                let packet = TransportPacket::new(
+                TransportPacket::new(
                     PacketKind::FrameFragment,
                     self.take_sequence(),
                     fragment.frame_sequence,
                     fragment.index,
                     fragment.total,
                     fragment.bytes,
-                );
-                packet
+                )
             })
             .collect())
     }

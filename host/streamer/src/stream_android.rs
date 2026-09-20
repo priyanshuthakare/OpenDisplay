@@ -639,7 +639,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         // PR-3+: plaintext refused always; PIN+TLS 1.3 required.
         // --pin may be omitted on reconnect: a tablet that already trusts
         // this host_id skips the PIN check (TLS fingerprint still enforced).
-        let pin = args.pin.as_deref();
+        let env_pin = std::env::var("USBDISPLAY_WIFI_PIN").ok();
+        let pin = args.pin.as_deref().or(env_pin.as_deref());
         if pin.is_none() {
             println!("wifi_pin=omitted (ok only for already-trusted hosts)");
         }

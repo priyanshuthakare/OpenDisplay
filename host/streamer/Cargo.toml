@@ -6,9 +6,11 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 hex = "0.4"
+rcgen = "0.13"
 rustls = "0.23"
 rustls-pki-types = "1.11"
 rustls-native-certs = "0.7"
@@ -22,10 +24,11 @@ usbdisplay-encoder = { path = "../encoder" }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
 [dev-dependencies]
-rcgen = "0.13"
 tempfile = "3"
 usbdisplay-encoder = { path = "../encoder" }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Threading;
@@ -20,7 +21,8 @@ public interface IProcessRunner
 
     Process StartLongRunning(
         string exePath, string[] args, string? workingDir,
-        DataReceivedEventHandler? onOut, DataReceivedEventHandler? onErr);
+        DataReceivedEventHandler? onOut, DataReceivedEventHandler? onErr,
+        IReadOnlyDictionary<string, string?>? environment = null);
 }
 
 public sealed class ProcessRunner : IProcessRunner
@@ -60,13 +62,18 @@ public sealed class ProcessRunner : IProcessRunner
 
     public Process StartLongRunning(
         string exePath, string[] args, string? workingDir,
-        DataReceivedEventHandler? onOut, DataReceivedEventHandler? onErr)
+        DataReceivedEventHandler? onOut, DataReceivedEventHandler? onErr,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         ValidateExe(exePath);
         var process = new Process();
         process.StartInfo = BaseStartInfo(exePath, args, workingDir);
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
+        if (environment != null)
+        {
+            foreach (var pair in environment) process.StartInfo.Environment[pair.Key] = pair.Value;
+        }
         process.EnableRaisingEvents = true;
         if (onOut != null) process.OutputDataReceived += onOut;
         if (onErr != null) process.ErrorDataReceived += onErr;
