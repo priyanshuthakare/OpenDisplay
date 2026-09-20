@@ -1,0 +1,33 @@
+# Review Findings
+
+Verification snapshot for the release-prep review. Each row records the code evidence found before making behavior changes. Later phase branches should update this file if a finding changes.
+
+| Item | Evidence | Status |
+| --- | --- | --- |
+| 1.1 Trusted-host bypass | `android/app/src/main/java/org/usbdisplay/client/WifiListener.kt:134` skips PIN when `identity.isTrusted(hello.hostId)`; `TabletIdentity.kt:101` stores trusted values by `hostId`; `WifiListener.kt:153` falls back to the client IP when `host_id` is blank. `createTlsServerSocket()` initializes TLS with no trust managers and does not set `needClientAuth` (`WifiListener.kt:105`). | Confirmed |
+| 1.2 PIN handling | `PinVerifier.kt:15` has one global failure counter and `PinVerifier.kt:35` locks out after three misses. `TabletIdentity.kt:46` persists one PIN until manual rotation; `WifiListener.kt:151` accepts it without checking a pairing window or single-use state. | Confirmed |
+| 1.3 Listener robustness | `WifiListener.kt:67` accepts a socket and `WifiListener.kt:76` calls `handleClient` inline; `WifiListener.kt:144` and `WifiListener.kt:161` set `soTimeout = 0` after handshake. The first frame cap is 64 KiB plus header (`WifiListener.kt:180`), but there is no dedicated Hello cap. | Confirmed |
+| 1.4 Exposure | Wi-Fi binds `0.0.0.0:27184` unconditionally when `WifiListener.start()` is called (`WifiListener.kt:65`, `WifiListener.kt:109`). USB loopback binds `127.0.0.1:27183` in `StreamSession.runLoop()` without a foreground gate (`StreamSession.kt:47`). | Confirmed |
+| 1.5 Secrets | Tablet TLS private key is stored as Base64 PKCS#8 in SharedPreferences (`TabletIdentity.kt:73`, `TabletIdentity.kt:141`). Control Center persists `AppSettings.Pin` (`Records.cs:95`) to `control-app-settings.json` (`ConfigurationService.cs:51`) and passes it as `--pin` (`StreamerCli.cs:130`). `PairingStore.save_to()` writes `paired.json` without setting a user-only ACL (`pairing.rs:92`). | Confirmed |
+| 1.6 Input consent | Android sends `Control` input packets directly in `StreamPipeline.sendInput()` (`StreamPipeline.kt:75`) with no per-PC consent. Host input reader injects every decoded event (`stream_android.rs:487` to `stream_android.rs:491`) and `input_inject.rs` has no validation/rate limit before `SendInput`. | Confirmed |
+| 2.1 BMP-on-disk streaming path | `stream-capture` reads `capture_*.bmp` from `%ProgramData%\USBDisplay\capture` (`main.rs:79`, `stream_android.rs:904`, `stream_android.rs:917`). `encode_capture.rs:3` documents the same on-disk handoff. | Confirmed |
+| 2.2 Encoder | `color.rs:5` documents CPU BT.601 limited-range BGRA-to-NV12 conversion. `stream_android.rs:392` re-creates the encoder to change bitrate. NVENC/QSV/AMF files are stubs (`backends/nvenc.rs:1`, `backends/qsv.rs:1`, `backends/amf.rs:1`). | Confirmed |
+| 2.3 Mouse cursor | No `IddCxMonitorSetupHardwareCursor` or cursor protocol path was found by search; docs and driver README do not claim implemented cursor composition. | Confirmed |
+| 2.4 Mode changes without killing stream | `stream_android.rs:777` and `stream_android.rs:1050` bail with “restart stream” when capture size changes. | Confirmed |
+| 2.5 Real latency measurement | Dashboard text still says `Latency: N/A (not measured by the pipeline)` (`control-app/src/USBDisplay.ControlApp/UI/Views/DashboardView.xaml:125`); `StreamTelemetry` has no latency percentile fields (`Records.cs:34`). | Confirmed |
+| 3.1 Redundant reliability layer | `transport/src/lib.rs` defines ACK, retransmit, and heartbeat (`PacketKind::Ack`, `RetransmitWindow`, `HeartbeatMonitor`), while live TCP paths only frame packets and ignore most non-video control packets. | Confirmed |
+| 3.2 USB friction | USB still depends on ADB forwarding (`UsbAdbTransport.cs:12`, `UsbDisplayGateway.cs:264`). Android manifest declares `android.hardware.usb.host` as required (`AndroidManifest.xml:2`) even though the tablet listener is a loopback server. | Confirmed |
+| 4.1 Coordinate mapping | `input_inject.rs:5` says normalized coordinates map directly to absolute mouse space, and `input_inject.rs:131` uses `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK` with no monitor rectangle lookup. | Confirmed |
+| 4.2 Touch and pen | `input_inject.rs` uses mouse `SendInput`; no `InjectTouchInput` or `CreateSyntheticPointerDevice` references were found. | Confirmed |
+| 4.3 Keyboard | Keyboard path uses Unicode or a small named-key map (`input_inject.rs:171`); protocol key layout reserves modifiers (`protocol/src/input.rs:208`) and has no scan-code/repeat/non-BMP support. | Confirmed |
+| 5.1 Android latency | `FramePacer.kt` exists for PTS scheduling, while `StreamPipeline.kt:275` currently releases output buffers immediately. Low-latency `MediaFormat` keys were not found. | Partially confirmed |
+| 5.2 Android lifecycle | `MainActivity` starts/stops sessions on lifecycle callbacks, but no robust reconnect/rotation contract with the host was found. | Confirmed |
+| 5.3 Parsing | `PcPairPayload.kt:18` and `PairPayload.kt:16` check versions with `String.contains`; parsing uses `indexOf` helpers. | Confirmed |
+| 6.1 Driver robustness | Driver docs list hot plug, sleep/resume, rotation, and mode changes as future work (`driver/idd/README.md:16`). | Confirmed |
+| 6.2 Signing and installer | `driver/idd/sign-driver.ps1` is dev/test-signing oriented; no installer project was found by file search. | Confirmed |
+| 7.1 Committed IDE junk | `control-app/UpgradeLog.htm` and `control-app/Backup/USBDisplay.sln` are present; `.vs` files were not listed by `rg --files`, but ignore rules still need verification and update. | Partially confirmed |
+| 7.2 Honest capabilities | `host/streamer/src/main.rs:146` advertises `av1`, `main.rs:147` advertises `native-usb-bulk`, and `main.rs:149` advertises `hid-touch,hid-pen`; these are not implemented. | Confirmed |
+| 7.3 Naming | README and project files contain both OpenDisplay/USBDisplay-era naming; package and IDs include `org.usbdisplay.client` and `Root\USBDisplayIdd` references in docs. | Confirmed |
+| 7.4 Licensing | Workspace declares `Apache-2.0 OR MIT` (`Cargo.toml:12`), but root `LICENSE-MIT`, `LICENSE-APACHE`, and `THIRD_PARTY_NOTICES.md` were not present in the file list. | Confirmed |
+| 7.5 README and docs | README still includes branch/status-oriented content and engineering details; `SECURITY.md`, `CONTRIBUTING.md`, and `docs/threat-model.md` were not present in the file list. | Confirmed |
+| 7.6 CI | `.github/workflows/rust.yml:39` labels fmt/clippy as non-blocking; search found no blocking dotnet, cargo-deny/audit, Android lint, Dependabot, or release workflow. | Confirmed |
