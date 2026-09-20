@@ -23,7 +23,7 @@ public interface IDriverManager
 public sealed class DriverManager : IDriverManager
 {
     public const string HardwareIdToken = "USBDisplayIdd";
-    public const string DriverVersionValue = "0.2.0.0";
+    public const string DriverVersionValue = "0.2.0.1";
 
     private readonly IProcessRunner _runner;
     private readonly IElevationService _elevation;
