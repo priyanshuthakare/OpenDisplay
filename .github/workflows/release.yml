@@ -108,7 +108,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # assembleDebug is signed with the standard Android debug key, so it is
       # directly installable via `adb install` with no minification surprises.
