@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 crc32fast = "1.4"
-thiserror = "1.0"
+thiserror = "2.0"
 usbdisplay-protocol = { path = "../protocol" }
 
 [dev-dependencies]
