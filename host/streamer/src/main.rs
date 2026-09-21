@@ -1,5 +1,6 @@
 mod adb;
 mod encode_capture;
+mod frame_section;
 mod input_inject;
 mod pairing;
 mod stream_android;
