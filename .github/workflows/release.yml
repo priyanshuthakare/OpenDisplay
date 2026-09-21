@@ -50,7 +50,7 @@ jobs:
           Compress-Archive -Path publish/control-center/* `
             -DestinationPath "publish/usbdisplay-control-center-${{ steps.ver.outputs.version }}-win-x64.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: control-center
           path: publish/usbdisplay-control-center-*-win-x64.zip
@@ -86,7 +86,7 @@ jobs:
           Compress-Archive -Path publish/* `
             -DestinationPath "publish/usbdisplay-streamer-${{ steps.ver.outputs.version }}-win-x64.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: streamer
           path: publish/usbdisplay-streamer-*-win-x64.zip
@@ -122,7 +122,7 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk \
              "dist/usbdisplay-android-${GITHUB_REF_NAME#v}.apk"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android
           path: android/dist/*.apk
@@ -143,7 +143,7 @@ jobs:
           zip -r "../../usbdisplay-driver-scripts.zip" . \
             -x "package/*" -x "obj/*" -x "bin/*" -x "*.user"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: driver-scripts
           path: usbdisplay-driver-scripts.zip
