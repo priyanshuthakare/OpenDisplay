@@ -176,7 +176,7 @@ Three slices are fully working, plus two transports and a GUI orchestration laye
 ### 2.6 Input return channel — DONE (software slice)
 
 - Android captures touch (incl. batched historical MOVE samples) + keyboard, normalizes to `0..65535`, packs fixed 16-byte events, sends in transport `Control` packets on the same socket.
-- Host reads on dedicated thread (`run_input_reader`), injects via Win32 `SendInput`: absolute mouse (`MOUSEEVENTF_ABSOLUTE|VIRTUALDESK`), Unicode text (`KEYEVENTF_UNICODE`), named keys via VK codes. `input_events_injected` counter proves delivery.
+- Host reads on dedicated thread (`run_input_reader`), injects via Win32 `SendInput`: absolute mouse mapped into the virtual monitor's rectangle (`MOUSEEVENTF_ABSOLUTE|VIRTUALDESK`), Unicode text (`KEYEVENTF_UNICODE`), named keys via VK codes. `input_events_injected` counter proves delivery; `input_target_monitor=` on stderr records which monitor was resolved.
 - Pinned by matching Rust + Kotlin reference-byte tests so wire formats never drift.
 - Still open: stylus pressure/tilt/eraser, IME composition, relative mouse mode, dedicated HID device bound to virtual monitor (driver-side).
 
@@ -204,12 +204,12 @@ Three slices are fully working, plus two transports and a GUI orchestration laye
 | 1 Virtual Display Driver | IDD sample → USBDisplay EDID → dynamic create/remove → mode changes, sleep/resume/hotplug/rotation | **Done** for enumerate + Extend/Duplicate + swap-chain. Sleep/resume/hotplug/rotation tests still open. |
 | 2 Virtual Monitor Capture | Enumerate virtual monitor only, no whole-desktop path, dirty rects | **Done** (swap-chain readback is inherently monitor-only). Dirty-rect tracking open. |
 | 3 Hardware Encoding | Probe chain, MF impl, H.265 baseline, bitrate/GOP/scene controls | **Partial**: chain + MF H.264 + validation done. NVENC/QSV/AMF stubs, H.265 E2E validation, rate-control tuning open. |
-| 4 USB Transport | ADB bridge → native bulk, fragmentation/CRC/double-buffer/reconnect, USB2/3 adaptation | **Partial**: ADB bridge + fragmentation/CRC + live mode done. Native bulk endpoints, disk-free SHM handoff, reconnect SM, USB2/3 adaptation open. |
+| 4 USB Transport | ADB bridge → native bulk, fragmentation/CRC/double-buffer/reconnect, USB2/3 adaptation | **Partial**: ADB bridge + fragmentation/CRC + live mode done; a Windows mode switch is now absorbed live (the encoder is rebuilt and the sender retagged, `stream_resolution_change`) instead of aborting. Native bulk endpoints, disk-free SHM handoff, reconnect SM, USB2/3 adaptation open. |
 | 5 Android Decode/Render | H.265 decode, SurfaceView pacing, adaptive buffering/backpressure, 60/120 fps validation | **Partial**: H.264/H.265 decode + pacing + backpressure done. Buffer tuning + on-device 60/120 fps latency validation need hardware. |
-| 6 Input | Touch→HID, stylus pressure/tilt/eraser/Ink, keyboard/IME, mouse abs/rel/scroll | **Partial**: touch + keyboard software slice done. Stylus/IME/relative/HID-device binding open. |
+| 6 Input | Touch→HID, stylus pressure/tilt/eraser/Ink, keyboard/IME, mouse abs/rel/scroll | **Partial**: touch + keyboard software slice done, with coordinates mapped into the virtual monitor's rectangle so multi-monitor desktops are correct. Stylus/IME/relative/HID-device binding open. |
 | 7 Diagnostics/Packaging | Dashboard, installer + signing, latency/bandwidth graphs, CI | **Partial**: Control Center (3-page shell: Home / Setup / Advanced) + `verify.ps1` + GitHub Actions (Rust ubuntu+windows, Android JDK17 test+APK, .NET test on windows-latest) done. Installer/signing flow + realtime graphs open. Lint (`fmt --check`, `clippy`) runs non-blocking — pre-existing debt, not a merge gate yet. |
 
-**Release readiness:** the repository is prepared for an open-source release — dual `LICENSE-*`, `SECURITY.md`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md`, no committed IDE/build junk, honest `capabilities`, aligned driver version, and CI covering all three buildable components. Remaining gaps are tracked openly in [`docs/review-findings.md`](docs/review-findings.md) (mostly hardware- or certificate-dependent: signed driver, native USB bulk, vendor encoder backends, on-device latency validation).
+**Release readiness:** the repository is prepared for an open-source release — dual `LICENSE-*`, `SECURITY.md`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md`, no committed IDE/build junk, honest `capabilities`, aligned driver version, a tag-triggered release workflow, and CI covering all three buildable components. The correctness findings from the release review are closed: multi-monitor input mapping (§4.5), live resolution changes (§4.2/§4.4), and strict pairing-payload parsing. Remaining gaps are tracked openly in [`docs/review-findings.md`](docs/review-findings.md) — mostly hardware- or certificate-dependent (signed driver, native USB bulk, vendor encoder backends, on-device latency validation), plus the phase-1 Wi-Fi security hardening items.
 
 **Today you can:** build/test Rust protocol, run CLI probes, sign+install IDD and see virtual monitor, `encode-capture` BMPs to validated H.264, install Android shell and stream decoded frames over USB or WiFi, drive everything from Control Center GUI or CLI.
 
@@ -352,7 +352,7 @@ Key (`kind=2`):
 | 4 | 2 | Unicode BMP code point (when named=`char`) |
 | 6 | 10 | reserved |
 
-Reference bytes: pointer `Down/Left/id2 (40000,12345)` → `01 01 00 02 40 9C 39 30 00 00 00 00 00 00 00 00`; key `'A'` down → `02 01 00 00 41 00 00…`. Host maps normalized coords to `MOUSEEVENTF_ABSOLUTE|VIRTUALDESK` (no per-monitor scaling); text via `KEYEVENTF_UNICODE`, named keys via VK.
+Reference bytes: pointer `Down/Left/id2 (40000,12345)` → `01 01 00 02 40 9C 39 30 00 00 00 00 00 00 00 00`; key `'A'` down → `02 01 00 00 41 00 00…`. The host maps normalized coords into the **virtual monitor's rectangle** within the virtual desktop and injects with `MOUSEEVENTF_ABSOLUTE|VIRTUALDESK` (multi-monitor safe; falls back to the whole desktop when the monitor is absent); text via `KEYEVENTF_UNICODE`, named keys via VK.
 
 ### 4.6 Encoder interface (`host/encoder`)
 
@@ -512,7 +512,7 @@ Dashboard → START USB DISPLAY runs the same gated orchestration as the CLI pat
 - `dotnet test USBDisplay.sln`: CLI/adb/pnputil parsing, telemetry, settings round-trip, log service, crash bounds, start/stop machine, pairing QR, capture monitor.
 - Integration/system (need hardware): ADB loop, decoder recovery after drops, unplug reconnect, suspend/resume, 1080p60 USB2, 1440p120 USB3, multi-monitor/tablet, rotation/resolution switch, Extend/Duplicate.
 - Perf gates: USB2 1080p60 <35 ms glass-to-glass, USB3 1440p120 <20 ms, host CPU <10%, GPU <15%, RAM <250 MB; WiFi 1080p60 <80 ms p50 / <120 ms p95, 5-min soak no disconnect, adaptation lines under loss, input round-trip via `input_events_injected`, pairing gates (wrong PIN rejected, rotated cert rejected with fp guidance, trusted reconnect skips PIN, AP-isolated prints guidance).
-- CI (`.github/workflows/`): **Rust** on `ubuntu-latest + windows-latest` (Linux = portable fallbacks, Windows = real MF encoder + `SendInput` path) + non-blocking `fmt --check`/`clippy` lint; **Android** on JDK 17 (`testDebugUnitTest` + `assembleDebug` + APK artifact).
+- CI (`.github/workflows/`): **Rust** on `ubuntu-latest + windows-latest` (Linux = portable fallbacks, Windows = real MF encoder + `SendInput` path) + non-blocking `fmt --check`/`clippy` lint; **Android** on JDK 17 (`testDebugUnitTest` + `assembleDebug` + APK artifact); **Control Center** on `windows-latest` (`dotnet build` + `dotnet test`). A `v*` tag additionally builds the release assets — see §8.
 
 ---
 
