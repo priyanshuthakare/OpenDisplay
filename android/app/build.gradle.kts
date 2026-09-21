@@ -41,5 +41,5 @@ dependencies {
     // android.jar's org.json is a stub that throws "Stub!" in JVM unit tests.
     // This supplies the real implementation so pairing-payload parsing is
     // actually exercised by testDebugUnitTest.
-    testImplementation("org.json:json:20231013")
+    testImplementation("org.json:json:20260814")
 }
