@@ -21,7 +21,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -42,7 +42,7 @@ jobs:
     # Tighten to a hard gate once the backlog is cleared.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install stable toolchain with rustfmt and clippy
         uses: dtolnay/rust-toolchain@stable
