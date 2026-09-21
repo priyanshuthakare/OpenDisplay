@@ -40,4 +40,18 @@ class PcPairPayloadTest {
         assertFalse(PcPairPayload.isValidHostId(""))
         assertFalse(PcPairPayload.isValidHostId("host-" + "a".repeat(100)))
     }
+
+    @Test
+    fun rejectsAVersionThatMerelyPrefixesTheExpectedOne() {
+        // Regression: a `contains("\"v\":1")` check accepted this, because the
+        // string `"v":10` starts with `"v":1`.
+        assertNull(PcPairPayload.parseHostId("""{"v":10,"host_id":"host-acer-pc"}"""))
+    }
+
+    @Test
+    fun rejectsPayloadsThatAreNotJson() {
+        assertNull(PcPairPayload.parseHostId("not json at all"))
+        assertNull(PcPairPayload.parseHostId(""))
+        assertNull(PcPairPayload.parseHostId("""{"v":1,"host_id":"""))
+    }
 }

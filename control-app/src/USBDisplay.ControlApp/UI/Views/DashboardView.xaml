@@ -83,6 +83,7 @@
           <TextBlock Text="{Binding PairingQrCaption}" Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,4,0,0"/>
         </StackPanel>
         <TextBlock Text="{Binding ConnectionNote}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+        <TextBlock Text="The PIN is supplied to the streamer through its process environment and is not included in the displayed command line. Disk frame capture is disabled; the streaming pipeline must use the in-memory handoff." Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,4,0,0"/>
       </StackPanel>
     </Border>
 

@@ -10,7 +10,7 @@ namespace USBDisplay.ControlApp.ViewModels;
 public sealed class MainViewModel : ObservableObject
 {
     private readonly IUsbDisplayGateway _gateway;
-    private string _currentPage = "Dashboard";
+    private string _currentPage = "Home";
 
     public MainViewModel(IUsbDisplayGateway gateway)
     {
@@ -24,11 +24,20 @@ public sealed class MainViewModel : ObservableObject
         Logs = new LogsViewModel(gateway);
         Diagnostics = new DiagnosticsViewModel(gateway);
         Settings = new SettingsViewModel(gateway);
-        Navigate = new RelayCommand(p => CurrentPage = p as string ?? "Dashboard");
+        // Three-item shell: Home (run it), Setup (driver + device),
+        // Advanced (display/services/logs/diagnostics/settings as tabs).
+        Setup = new SetupViewModel(Driver, Device);
+        Advanced = new AdvancedViewModel(Display, Services, Logs, Diagnostics, Settings);
+        Navigate = new RelayCommand(p => CurrentPage = p as string ?? "Home");
         Start = new AsyncRelayCommand(async _ => await _gateway.StartAsync());
         Stop = new AsyncRelayCommand(async _ => await _gateway.StopAsync());
         Restart = new AsyncRelayCommand(async _ => await _gateway.RestartAsync());
         Refresh = new AsyncRelayCommand(async _ => await _gateway.RefreshAllAsync());
+        ShowDiagnostics = new RelayCommand(_ =>
+        {
+            Advanced.SelectedIndex = AdvancedViewModel.DiagnosticsTabIndex;
+            CurrentPage = "Advanced";
+        });
         CloseFirstRun = new RelayCommand(_ =>
         {
             _gateway.Settings.FirstRunDone = true;
@@ -46,12 +55,15 @@ public sealed class MainViewModel : ObservableObject
     public LogsViewModel Logs { get; }
     public DiagnosticsViewModel Diagnostics { get; }
     public SettingsViewModel Settings { get; }
+    public SetupViewModel Setup { get; }
+    public AdvancedViewModel Advanced { get; }
 
     public RelayCommand Navigate { get; }
     public AsyncRelayCommand Start { get; }
     public AsyncRelayCommand Stop { get; }
     public AsyncRelayCommand Restart { get; }
     public AsyncRelayCommand Refresh { get; }
+    public RelayCommand ShowDiagnostics { get; }
     public RelayCommand CloseFirstRun { get; }
 
     public string CurrentPage
@@ -68,13 +80,8 @@ public sealed class MainViewModel : ObservableObject
 
     public object CurrentViewModel => CurrentPage switch
     {
-        "Driver" => Driver,
-        "Display" => Display,
-        "Device" => Device,
-        "Services" => Services,
-        "Logs" => Logs,
-        "Diagnostics" => Diagnostics,
-        "Settings" => Settings,
+        "Setup" => Setup,
+        "Advanced" => Advanced,
         _ => Dashboard,
     };
 

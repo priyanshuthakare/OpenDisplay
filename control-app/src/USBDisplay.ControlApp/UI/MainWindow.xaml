@@ -7,29 +7,15 @@
         MinHeight="600" MinWidth="900">
   <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    <!-- Home: run it. Setup: driver + device. Advanced: everything else (tabs). -->
     <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
       <views:DashboardView/>
     </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:DriverViewModel}">
-      <views:DriverView/>
+    <DataTemplate DataType="{x:Type vm:SetupViewModel}">
+      <views:SetupView/>
     </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:DisplayViewModel}">
-      <views:DisplayView/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:DeviceViewModel}">
-      <views:DeviceView/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:ServicesViewModel}">
-      <views:ServicesView/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:LogsViewModel}">
-      <views:LogsView/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:DiagnosticsViewModel}">
-      <views:DiagnosticsView/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
-      <views:SettingsView/>
+    <DataTemplate DataType="{x:Type vm:AdvancedViewModel}">
+      <views:AdvancedView/>
     </DataTemplate>
   </Window.Resources>
   <Grid>
@@ -62,14 +48,9 @@
 
     <!-- Nav -->
     <StackPanel Grid.Row="1" Grid.Column="0" Background="{StaticResource Card}" Margin="0,0,0,0">
-      <Button Content="Dashboard" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Dashboard"/>
-      <Button Content="Driver" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Driver"/>
-      <Button Content="Display" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Display"/>
-      <Button Content="Device" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Device"/>
-      <Button Content="Services" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Services"/>
-      <Button Content="Logs" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Logs"/>
-      <Button Content="Diagnostics" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Diagnostics"/>
-      <Button Content="Settings" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Settings"/>
+      <Button Content="Home" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Home"/>
+      <Button Content="Setup" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Setup"/>
+      <Button Content="Advanced" Style="{StaticResource NavButton}" Command="{Binding Navigate}" CommandParameter="Advanced"/>
     </StackPanel>
 
     <!-- Page -->
@@ -86,12 +67,12 @@
           <TextBlock Text="Welcome to USBDisplay" FontSize="22" FontWeight="Bold" Margin="0,0,0,8"/>
           <TextBlock Text="Connect your Android tablet to turn it into a secondary Windows display."
                      TextWrapping="Wrap" Foreground="{StaticResource Dim}" Margin="0,0,0,12"/>
-          <TextBlock Text="01  USBDisplay driver — see the Driver page to install (admin required)." Margin="0,2"/>
-          <TextBlock Text="02  Android device — connect over USB, enable USB debugging." Margin="0,2"/>
-          <TextBlock Text="03  Verify — run Diagnostics, then START USB DISPLAY." Margin="0,2"/>
+          <TextBlock Text="01  Setup — install the USBDisplay driver (admin required)." Margin="0,2"/>
+          <TextBlock Text="02  Setup — connect your Android device (enable USB debugging)." Margin="0,2"/>
+          <TextBlock Text="03  Home — run Diagnostics in Advanced, then START USB DISPLAY." Margin="0,2"/>
           <TextBlock Text="Changing resolution later restarts the capture pipeline." Foreground="{StaticResource Dim}" Margin="0,8,0,12" TextWrapping="Wrap"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Open Diagnostics" Command="{Binding Navigate}" CommandParameter="Diagnostics"/>
+            <Button Content="Run Diagnostics" Command="{Binding ShowDiagnostics}"/>
             <Button Content="Get Started" Style="{StaticResource PrimaryButton}" Command="{Binding CloseFirstRun}"/>
           </StackPanel>
         </StackPanel>

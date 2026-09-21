@@ -409,6 +409,35 @@ fn recreate_encoder(
     encoder.ok_or_else(|| anyhow::anyhow!("no encoder backend available for bitrate {bitrate_bps}"))
 }
 
+/// Apply a mid-stream capture size change.
+///
+/// A Windows mode switch (Display Settings, Extend/Duplicate, resolution
+/// change) alters the virtual monitor's size while we are streaming. Instead of
+/// treating that as fatal, rebuild the encoder at the new dimensions and retag
+/// the sender so the next frame carries the correct WxH. Android's
+/// `StreamPipeline` already recreates its `MediaCodec` when the frame WxH
+/// changes, so the switch becomes a brief hiccup rather than a dead stream.
+#[allow(clippy::too_many_arguments)]
+fn apply_size_change<W: Write>(
+    sender: &mut FrameSender<W>,
+    encoder: &mut Box<dyn usbdisplay_encoder::VideoEncoder>,
+    old: (u32, u32),
+    new: (u32, u32),
+    fps: u32,
+    bitrate_bps: u32,
+    gop: u32,
+    codec: Codec,
+) -> Result<()> {
+    *encoder = recreate_encoder(new.0, new.1, fps, bitrate_bps, gop, codec)?;
+    sender.width = new.0 as u16;
+    sender.height = new.1 as u16;
+    println!(
+        "stream_resolution_change old={}x{} new={}x{}",
+        old.0, old.1, new.0, new.1
+    );
+    Ok(())
+}
+
 fn emit_stats_json(sender: &FrameSender<&mut VideoStream>, injected: &Arc<AtomicU64>) {
     println!("{}", sender.stats_line(injected.load(Ordering::Relaxed)));
 }
@@ -639,7 +668,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         // PR-3+: plaintext refused always; PIN+TLS 1.3 required.
         // --pin may be omitted on reconnect: a tablet that already trusts
         // this host_id skips the PIN check (TLS fingerprint still enforced).
-        let pin = args.pin.as_deref();
+        let env_pin = std::env::var("USBDISPLAY_WIFI_PIN").ok();
+        let pin = args.pin.as_deref().or(env_pin.as_deref());
         if pin.is_none() {
             println!("wifi_pin=omitted (ok only for already-trusted hosts)");
         }
@@ -733,6 +763,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
         };
         let mut total_input_frames = 0usize;
         let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
+        // Live capture size; updated in place when Windows changes the mode.
+        let mut current_size = (first.width, first.height);
 
         if args.live {
             let playback_start = Instant::now();
@@ -772,14 +804,18 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                         continue;
                     }
                 };
-                if frame.width != first.width || frame.height != first.height {
-                    bail!(
-                        "capture size changed to {}x{} (was {}x{}); restart stream",
-                        frame.width,
-                        frame.height,
-                        first.width,
-                        first.height
-                    );
+                if (frame.width, frame.height) != current_size {
+                    apply_size_change(
+                        &mut sender,
+                        &mut encoder,
+                        current_size,
+                        (frame.width, frame.height),
+                        args.fps,
+                        current_bitrate,
+                        current_gop,
+                        args.codec,
+                    )?;
+                    current_size = (frame.width, frame.height);
                 }
 
                 let ts = playback_start.elapsed().as_nanos() as u64;
@@ -792,8 +828,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                         sender.last_stall_ms(),
                         kf_requests.load(Ordering::Relaxed),
                         &mut current_bitrate,
-                        first.width,
-                        first.height,
+                        current_size.0,
+                        current_size.1,
                         args.fps,
                         current_gop,
                         args.codec,
@@ -828,15 +864,20 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                     }
                     let frame = read_bgra_bmp(&fs::read(path)?)
                         .with_context(|| format!("decoding {}", path.display()))?;
-                    if frame.width != first.width || frame.height != first.height {
-                        bail!(
-                            "frame {} size {}x{} differs from first {}x{}",
-                            path.display(),
-                            frame.width,
-                            frame.height,
-                            first.width,
-                            first.height
-                        );
+                    if (frame.width, frame.height) != current_size {
+                        // A size change mid-replay (mixed capture set). Rebuild
+                        // the encoder rather than aborting the run.
+                        apply_size_change(
+                            &mut sender,
+                            &mut encoder,
+                            current_size,
+                            (frame.width, frame.height),
+                            args.fps,
+                            current_bitrate,
+                            current_gop,
+                            args.codec,
+                        )?;
+                        current_size = (frame.width, frame.height);
                     }
                     let ts = source_timestamp_ns;
                     source_timestamp_ns = source_timestamp_ns.saturating_add(frame_dur_ns);
@@ -855,8 +896,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                             sender.last_stall_ms(),
                             kf_requests.load(Ordering::Relaxed),
                             &mut current_bitrate,
-                            first.width,
-                            first.height,
+                            current_size.0,
+                            current_size.1,
                             args.fps,
                             current_gop,
                             args.codec,
@@ -995,6 +1036,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
     };
     let mut total_input_frames = 0usize;
     let max_input_frames = args.max_frames.unwrap_or(usize::MAX);
+    // Live capture size; updated in place when Windows changes the mode.
+    let mut current_size = (first.width, first.height);
 
     if args.live {
         // Live second-monitor mode: latency beats completeness. Each tick we
@@ -1043,16 +1086,21 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                     continue;
                 }
             };
-            if frame.width != first.width || frame.height != first.height {
-                // Resolution changed under us (mode switch). Bail cleanly; the
-                // caller can restart. Encoders here are fixed-size.
-                bail!(
-                    "capture size changed to {}x{} (was {}x{}); restart stream",
-                    frame.width,
-                    frame.height,
-                    first.width,
-                    first.height
-                );
+            if (frame.width, frame.height) != current_size {
+                // Resolution changed under us (Windows mode switch). Rebuild the
+                // encoder at the new size and keep going; Android recreates its
+                // MediaCodec on a WxH change.
+                apply_size_change(
+                    &mut sender,
+                    &mut encoder,
+                    current_size,
+                    (frame.width, frame.height),
+                    args.fps,
+                    current_bitrate,
+                    current_gop,
+                    args.codec,
+                )?;
+                current_size = (frame.width, frame.height);
             }
 
             let ts = playback_start.elapsed().as_nanos() as u64;
@@ -1065,8 +1113,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                     sender.last_stall_ms(),
                     kf_requests.load(Ordering::Relaxed),
                     &mut current_bitrate,
-                    first.width,
-                    first.height,
+                    current_size.0,
+                    current_size.1,
                     args.fps,
                     current_gop,
                     args.codec,
@@ -1102,15 +1150,20 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                 }
                 let frame = read_bgra_bmp(&fs::read(path)?)
                     .with_context(|| format!("decoding {}", path.display()))?;
-                if frame.width != first.width || frame.height != first.height {
-                    bail!(
-                        "frame {} size {}x{} differs from first {}x{}",
-                        path.display(),
-                        frame.width,
-                        frame.height,
-                        first.width,
-                        first.height
-                    );
+                if (frame.width, frame.height) != current_size {
+                    // A size change mid-replay (mixed capture set). Rebuild the
+                    // encoder rather than aborting the run.
+                    apply_size_change(
+                        &mut sender,
+                        &mut encoder,
+                        current_size,
+                        (frame.width, frame.height),
+                        args.fps,
+                        current_bitrate,
+                        current_gop,
+                        args.codec,
+                    )?;
+                    current_size = (frame.width, frame.height);
                 }
                 let ts = source_timestamp_ns;
                 source_timestamp_ns = source_timestamp_ns.saturating_add(frame_dur_ns);
@@ -1129,8 +1182,8 @@ pub fn run(args: StreamCaptureArgs) -> Result<()> {
                         sender.last_stall_ms(),
                         kf_requests.load(Ordering::Relaxed),
                         &mut current_bitrate,
-                        first.width,
-                        first.height,
+                        current_size.0,
+                        current_size.1,
                         args.fps,
                         current_gop,
                         args.codec,

@@ -137,7 +137,7 @@ Notation: **M** = must (v1 gate), **S** = should, **F** = future (tracked, not g
 | FR-ENC-2 | M | MF H.264 Annex-B encode via async MFT event model (`MF_TRANSFORM_ASYNC_UNLOCK`, `NeedInput/HaveOutput/DrainComplete`) | `encode-capture` produces playable stream |
 | FR-ENC-3 | M | Each coded picture → `EncodedFrame` → `Packetizer` (prove encode→frame→transport) | `transport_packets>0` in report |
 | FR-ENC-4 | M | Deterministic validation: NAL SPS+PPS+≥1 IDR (`stream_playable=true`) + MF decoder round-trip count match | `OVERALL: PASS`, `decode_roundtrip=PASS` |
-| FR-ENC-5 | S | Flags `--codec h264|h265 --bitrate --fps --gop --max-frames --verify-decode`; fixed-size encoders bail cleanly on resolution change with `restart stream` | CLI help + error test |
+| FR-ENC-5 | S | Flags `--codec h264|h265 --bitrate --fps --gop --max-frames --verify-decode`; rebuilds the encoder at the new size on a resolution change (`stream_resolution_change`) | CLI help + error test |
 | FR-ENC-6 | F | Real NVENC/QSV/AMF, H.265 E2E validation, rate-control/scene-change tuning | Stubs today |
 
 ### 5.4 Transports — framing shared (FR-TR)
@@ -263,7 +263,7 @@ Current baseline already satisfies M1–M8 happy paths; §5 `F` items and NFR-P2
 | R-1 | Driver signing / attestation for broad install | Keep script-based elevated flow; document `DriverVer` + test-signing prereqs |
 | R-2 | Vendor encoder SDKs (NVENC/QSV/AMF) licensing/FFI | Trait + stubs; MF default keeps v1 shippable |
 | R-3 | AP-isolated / guest WLANs block Wi-Fi | Detect + explicit `use USB` guidance; never silent fallback |
-| R-4 | Half-written BMP / mode-switch mid-stream | Skip-and-retry; bail with `restart stream` on size change; SHM is future fix |
+| R-4 | Half-written BMP / mode-switch mid-stream | Skip-and-retry on a partial BMP; rebuild the encoder live on a size change (`stream_resolution_change`); SHM is future fix |
 | R-5 | Decoder heterogeneity across tablets | Recreate on WxH/codec; backpressure; on-device validation matrix |
 | R-6 | `SendInput` vs true HID semantics | Document software-slice limits; HID device is F |
 

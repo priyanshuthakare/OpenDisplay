@@ -1,7 +1,7 @@
 # USBDisplay
 
-[![Rust](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/rust.yml/badge.svg)](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/rust.yml)
-[![Android](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/android.yml/badge.svg)](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/android.yml)
+[![Rust](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/rust.yml/badge.svg)](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/rust.yml)
+[![Android](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/android.yml/badge.svg)](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/android.yml)
 
 USBDisplay is an open-source Windows-to-Android secondary display stack designed for **USB-first** operation, with **WiFi LAN (TLS 1.3 + PIN)** as an alternative transport.
 
@@ -20,6 +20,47 @@ Windows Display Stack → IDD (USBDisplay monitor) → Capture (swap-chain readb
   → Hardware Encoder (Media Foundation today) → Transport (USB ADB / WiFi TLS)
   → Android MediaCodec → SurfaceView
   ← Input return channel (Control packets → SendInput)
+```
+
+---
+
+## Get started
+
+> ### ⚠ Streaming does not work end-to-end yet
+>
+> The driver captures the virtual monitor into a CPU buffer, but **nothing hands
+> those frames to the streamer**. The driver→host capture handoff is not
+> implemented — `docs/PRD.md` FR-CAP-4 ("disk-free shared-memory handoff") is a
+> future PR, and disk capture was deliberately removed, so no `capture_*.bmp`
+> files are produced either.
+>
+> `stream-capture` therefore reports `no capture_*.bmp frames found` (or, with
+> `--loop`, waits forever printing `waiting_for_capture_frames=true`) on **both**
+> USB and Wi-Fi. Reinstalling the driver does not change this.
+>
+> **What does work:** everything downstream of capture, and it is tested. Point
+> `--input-dir` at your own `.bmp` frames and the full encode → transport →
+> Android decode path runs. Driver install and the virtual monitor, Wi-Fi
+> pairing, the Control Center, and the encoder all work. See §3 for the roadmap.
+
+**Just want to use it?** → **[QUICKSTART.md](QUICKSTART.md)** walks through the
+driver and the tablet app. Prebuilt, no-compile-needed artifacts are on the
+[Releases](https://github.com/priyanshuthakare/OpenDisplay/releases) page.
+
+**Building from source?**
+
+```powershell
+git clone https://github.com/priyanshuthakare/OpenDisplay
+cd OpenDisplay
+.\scripts\setup.ps1 -Check   # report which toolchains are present
+.\scripts\setup.ps1          # build + test everything available
+```
+
+**Releasing?** Push a tag and CI builds and publishes everything:
+
+```powershell
+.\scripts\check-versions.ps1 -Strict   # confirm components match VERSION
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 ---
@@ -85,15 +126,24 @@ control-app/            Windows Control Center GUI (.NET 8 + WPF, C#)
                         ProcessManager, DiagnosticsService, LogService,
                         ConfigurationService, CaptureMonitor, HostIdentity,
                         QrCodeService, StreamTelemetryAccumulator
-    ViewModels/         MainViewModel + one per page (8 pages)
-    UI/                 MainWindow.xaml + 8 views + SignalMonitor + dark theme
+    ViewModels/         MainViewModel + Setup/Advanced containers + leaf VMs
+    UI/                 MainWindow.xaml + views + SignalMonitor + dark theme
   tests/                MSTest: parsers, state machine, backoff, config,
                         diagnostics, pairing QR, capture monitor
 
-common/                 Cross-component contracts pointer
 docs/                   architecture.md, protocol.md, idd-driver.md, encoder.md,
                         wifi.md, control-app.md, development-plan.md, testing.md
-tests/ benchmarks/ tools/ scripts/   System/integration tests, perf harnesses
+scripts/                setup.ps1 (prereq check + guided build), check-versions.ps1
+.github/workflows/      rust.yml, android.yml, dotnet.yml, release.yml (tagged releases)
+
+QUICKSTART.md           End-user install + streaming walkthrough
+CHANGELOG.md            Release history (Keep a Changelog)
+LICENSE-APACHE, LICENSE-MIT   Dual license (Apache-2.0 OR MIT)
+SECURITY.md             Security model + private vulnerability reporting
+CONTRIBUTING.md         Build/test per component, conventions, PR flow
+THIRD_PARTY_NOTICES.md  Bundled dependency licenses
+CODE_OF_CONDUCT.md      Contributor Covenant 2.1
+VERSION                 Single source of truth for the release version
 ```
 
 ---
@@ -124,7 +174,7 @@ Three slices are fully working, plus two transports and a GUI orchestration laye
 - Frame loop `SwapChainProcessor::ProcessFrames`: `IddCxSwapChainSetDevice` → `ReleaseAndAcquireBuffer` loop (16 ms timeout on `E_PENDING`) → `FinishedProcessingFrame`.
 - Capture is a readback of **our own swap-chain surface only** — cannot contain whole desktop. `FrameCapturer`: lazy staging texture, `CopyResource`, `Map`, BGRA normalize honoring `RowPitch`, handles `B8G8R8A8/R8G8B8A8/R10G10B10A2`.
 - Hardening: try/catch around per-frame work (was killing WUDFHost), adapter-lifetime idempotency guard (`m_adapterInitStarted`), CRT-free early `OutputDebugStringW` signals, TraceLogging throughout, bounds-checked surface sizing, `verify.ps1` PASS/FAIL gates.
-- Production loop keeps frames in-memory; on-disk BMP dumps are diagnostics-only.
+- The production loop keeps the normalized frame in a CPU buffer for an in-memory handoff and writes nothing to disk. **That handoff has no consumer yet** — see the banner above and FR-CAP-4.
 
 ### 2.4 Hardware encoder (host) — DONE (Media Foundation H.264)
 
@@ -133,16 +183,16 @@ Three slices are fully working, plus two transports and a GUI orchestration laye
 - `encode-capture` validates deterministically: structural NAL check (SPS+PPS+≥1 IDR → `stream_playable=true`) + MF decoder MFT round-trip (decoded frame count must match; `1920x1088` coded size for 1080p is accepted macroblock rounding).
 - Unit tests for BMP reader, color conversion, NAL parser need no hardware.
 
-### 2.5 End-to-end USB debug path — DONE
+### 2.5 Encode → transport → decode path — DONE (given frames)
 
-- `stream-capture` encodes captured frames and streams over `adb forward tcp:27183 → 127.0.0.1:27183`.
+- `stream-capture` encodes frames found in `--input-dir` and streams over `adb forward tcp:27183 → 127.0.0.1:27183`. It does **not** capture anything itself: with no `.bmp` frames present it exits immediately, or waits forever printing `waiting_for_capture_frames=true` under `--loop`. See the banner at the top.
 - **Live mode (default)**: always encodes newest capture, deletes stale backlog (bounds disk), wall-clock timestamps — tablet stays a real second monitor instead of falling behind. `--no-live` = ordered fixed-fps replay for demos/inspection.
 - Android `StreamSession + StreamPipeline`: length-prefixed transport packets → frame reassembly → CRC check → `MediaCodec` decode → `SurfaceView`. Frame pacing via `FramePacer` (PTS → `nanoTime` deadline, timestamped `releaseOutputBuffer`), backpressure by draining/retrying instead of dropping when decoder is full.
 
 ### 2.6 Input return channel — DONE (software slice)
 
 - Android captures touch (incl. batched historical MOVE samples) + keyboard, normalizes to `0..65535`, packs fixed 16-byte events, sends in transport `Control` packets on the same socket.
-- Host reads on dedicated thread (`run_input_reader`), injects via Win32 `SendInput`: absolute mouse (`MOUSEEVENTF_ABSOLUTE|VIRTUALDESK`), Unicode text (`KEYEVENTF_UNICODE`), named keys via VK codes. `input_events_injected` counter proves delivery.
+- Host reads on dedicated thread (`run_input_reader`), injects via Win32 `SendInput`: absolute mouse mapped into the virtual monitor's rectangle (`MOUSEEVENTF_ABSOLUTE|VIRTUALDESK`), Unicode text (`KEYEVENTF_UNICODE`), named keys via VK codes. `input_events_injected` counter proves delivery; `input_target_monitor=` on stderr records which monitor was resolved.
 - Pinned by matching Rust + Kotlin reference-byte tests so wire formats never drift.
 - Still open: stylus pressure/tilt/eraser, IME composition, relative mouse mode, dedicated HID device bound to virtual monitor (driver-side).
 
@@ -168,18 +218,18 @@ Three slices are fully working, plus two transports and a GUI orchestration laye
 | Phase | Scope | Status |
 |---|---|---|
 | 1 Virtual Display Driver | IDD sample → USBDisplay EDID → dynamic create/remove → mode changes, sleep/resume/hotplug/rotation | **Done** for enumerate + Extend/Duplicate + swap-chain. Sleep/resume/hotplug/rotation tests still open. |
-| 2 Virtual Monitor Capture | Enumerate virtual monitor only, no whole-desktop path, dirty rects | **Done** (swap-chain readback is inherently monitor-only). Dirty-rect tracking open. |
+| 2 Virtual Monitor Capture | Enumerate virtual monitor only, no whole-desktop path, dirty rects | **Blocked** — readback into a CPU BGRA buffer works and is inherently monitor-only, but there is **no handoff to the host process**, so no frames ever reach the streamer. Handoff (FR-CAP-4) and dirty-rect tracking open. |
 | 3 Hardware Encoding | Probe chain, MF impl, H.265 baseline, bitrate/GOP/scene controls | **Partial**: chain + MF H.264 + validation done. NVENC/QSV/AMF stubs, H.265 E2E validation, rate-control tuning open. |
-| 4 USB Transport | ADB bridge → native bulk, fragmentation/CRC/double-buffer/reconnect, USB2/3 adaptation | **Partial**: ADB bridge + fragmentation/CRC + live mode done. Native bulk endpoints, disk-free SHM handoff, reconnect SM, USB2/3 adaptation open. |
+| 4 USB Transport | ADB bridge → native bulk, fragmentation/CRC/double-buffer/reconnect, USB2/3 adaptation | **Partial**: ADB bridge + fragmentation/CRC + live mode done; a Windows mode switch is now absorbed live (the encoder is rebuilt and the sender retagged, `stream_resolution_change`) instead of aborting. Native bulk endpoints, disk-free SHM handoff, reconnect SM, USB2/3 adaptation open. |
 | 5 Android Decode/Render | H.265 decode, SurfaceView pacing, adaptive buffering/backpressure, 60/120 fps validation | **Partial**: H.264/H.265 decode + pacing + backpressure done. Buffer tuning + on-device 60/120 fps latency validation need hardware. |
-| 6 Input | Touch→HID, stylus pressure/tilt/eraser/Ink, keyboard/IME, mouse abs/rel/scroll | **Partial**: touch + keyboard software slice done. Stylus/IME/relative/HID-device binding open. |
-| 7 Diagnostics/Packaging | Dashboard, installer + signing, latency/bandwidth graphs, CI | **Partial**: Control Center + `verify.ps1` + GitHub Actions (Rust ubuntu+windows, Android JDK17 APK artifact) done. Installer/signing flow + realtime graphs open. Lint (`fmt --check`, `clippy`) runs non-blocking — pre-existing debt, not a merge gate yet. |
+| 6 Input | Touch→HID, stylus pressure/tilt/eraser/Ink, keyboard/IME, mouse abs/rel/scroll | **Partial**: touch + keyboard software slice done, with coordinates mapped into the virtual monitor's rectangle so multi-monitor desktops are correct. Stylus/IME/relative/HID-device binding open. |
+| 7 Diagnostics/Packaging | Dashboard, installer + signing, latency/bandwidth graphs, CI | **Partial**: Control Center (3-page shell: Home / Setup / Advanced) + `verify.ps1` + GitHub Actions (Rust ubuntu+windows, Android JDK17 test+APK, .NET test on windows-latest) done. Installer/signing flow + realtime graphs open. Lint (`fmt --check`, `clippy`) runs non-blocking — pre-existing debt, not a merge gate yet. |
 
-**Current branch:** `feature/input-return-and-ci` ahead of `origin/feature/input-return-and-ci` with uncommitted work: `AndroidManifest.xml` (CAMERA for scan-to-trust), `WifiListener.kt`, `WifiPairActivity.kt`, `activity_wifi_pair.xml`, new `PcPairPayload.kt` + `ScanPcActivity.kt` + `activity_scan_pc.xml` + test, `control-app` solution/csproj/XAML/VM/service changes (`CaptureMonitor`, `HostIdentity`, `QrCodeService` + tests), `docs/wifi.md`, `host/streamer` main/stream/wifi changes. Commit or stash before switching branches.
+**Release readiness:** the repository is *packaged* for an open-source release — dual `LICENSE-*`, `SECURITY.md`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md`, no committed IDE/build junk, honest `capabilities`, aligned driver version, a tag-triggered release workflow, and CI covering all three buildable components. It is **not yet usable as a second display**: the driver→streamer capture handoff is missing (see the banner at the top), and that is the single blocking gap. The correctness findings from the release review are closed — multi-monitor input mapping (§4.5), live resolution changes (§4.2/§4.4), strict pairing-payload parsing — but they stay latent until capture is wired up. Remaining gaps are tracked in [`docs/review-findings.md`](docs/review-findings.md).
 
-**Today you can:** build/test Rust protocol, run CLI probes, sign+install IDD and see virtual monitor, `encode-capture` BMPs to validated H.264, install Android shell and stream decoded frames over USB or WiFi, drive everything from Control Center GUI or CLI.
+**Today you can:** build/test the Rust protocol, run CLI probes, sign+install the IDD and see the virtual monitor, `encode-capture` your own BMPs to validated H.264, and stream those frames through the full transport → Android decode path over USB or Wi-Fi.
 
-**You cannot yet:** use stylus pressure/tilt as Windows input; route input as dedicated HID device bound to virtual monitor; do native USB bulk (ADB bridge only); do disk-free SHM handoff; expect tuned 1440p120 / USB2-3 auto-adaptation.
+**You cannot yet:** stream the virtual monitor at all — the driver→streamer capture handoff is not implemented (the blocking gap); use stylus pressure/tilt as Windows input; route input as a dedicated HID device bound to the virtual monitor; do native USB bulk (ADB bridge only); expect tuned 1440p120 / USB2-3 auto-adaptation.
 
 ---
 
@@ -193,21 +243,24 @@ This section is the contract reference. Field orders, byte orders, ports, paths,
 Windows host                          Link                          Android tablet
 ────────────────                      ────                          ──────────────
 IDD virtual monitor
-  → %ProgramData%\USBDisplay\capture
+  → BGRA frame in the driver process  ╳  no handoff implemented (blocking gap)
   → MF H.264 encode ─┐
                      ├─► FrameSender ─► USB: adb forward tcp:27183 ─► ServerSocket(127.0.0.1:27183)
   ◄─ input events ───┘   (u32LE+USBT)  WiFi: TLS 1.3 → ip:27184 ────► SSLServerSocket(0.0.0.0:27184)
        SendInput                                                              MediaCodec → Surface
 ```
 
+`stream-capture` takes its frames from `--input-dir` (BMP files). Point it at your
+own frames to exercise everything below the gap.
+
 | Endpoint | Value | Notes |
 |---|---|---|
 | USB video + input | `127.0.0.1:27183` via `adb forward tcp:27183 tcp:27183` | Default `--transport usb`. ADB removed on drop (`AdbForwardGuard`). |
 | WiFi video + input | `<tablet-LAN-IP>:27184`, TLS 1.3 only | `--transport wifi --device-ip … --pin …`. No plaintext. |
-| Capture dir | `%ProgramData%\USBDisplay\capture\capture_*.bmp` | 32-bpp top-down `BI_RGB`. Live mode deletes stale backlog. |
+| Capture dir | `%ProgramData%\USBDisplay\capture\capture_*.bmp` | 32-bpp top-down `BI_RGB`. **Nothing writes this today** — the driver's disk capture was deliberately removed and the in-memory handoff is not implemented. `stream-capture` reads whatever frames you place here. |
 | WiFi TOFU store | `%AppData%\USBDisplay\paired.json` → `{tablet_id, ip, cert_fingerprint, paired_at}` | Read-only in GUI; never edited by GUI. |
 | GUI settings | `%AppData%\USBDisplay\control-app-settings.json` | Plain JSON, schema-tolerant load (see 4.8). |
-| Driver PnP ID | `Root\USBDisplayIdd`, driver `0.2.0.0` | `install.ps1 / uninstall.ps1 / verify.ps1`, `pnputil`, SetupAPI. |
+| Driver PnP ID | `Root\USBDisplayIdd`, driver `0.2.0.1` | 4-part install version, independent of the product version in `VERSION` (PnP keys the store on it). `install.ps1 / uninstall.ps1 / verify.ps1`, `pnputil`, SetupAPI. |
 | Driver logs | ETW `USBDisplay.IddDriver`, `DriverFrameworks-UserMode/Operational`, `Kernel-PnP/Configuration`, `System` | Read via `wevtutil`/EventLog (read-only). |
 
 ### 4.2 Host CLI (`usbdisplay-streamer`)
@@ -230,13 +283,13 @@ cargo run -p usbdisplay-streamer -- stream-capture --transport wifi --device-ip 
 | Command | Lines |
 |---|---|
 | `devices` | `serial=… state=Device|Unauthorized|Offline|Other model=… product=… transport_id=…` per device, or `no_android_devices=true` |
-| `capabilities` | `codecs=h264,h265,av1`, `transport=adb-compat,native-usb-bulk,wifi-tls`, `capture=virtual-monitor-only`, `input=hid-touch,hid-pen,keyboard,mouse` |
+| `capabilities` | `codecs=h264,h265`, `transport=adb-compat,wifi-tls`, `capture=virtual-monitor-only`, `input=mouse,keyboard` |
 | `probe-frame` | `probe_frame_bytes=N`, `payload_crc32=0x…` |
 | `transport-probe` | `transport_packets=N`, `transport_bytes=N`, `max_packet_payload=N` |
 | `encode-capture` | `encoder_backend=MediaFoundation`, `encoded_units=N`, `nal_total=N sps=… pps=… vps=… idr=N non_idr=N`, `stream_playable=true`, `transport_packets=N`, `decoded_frames=N decoded_size=WxH`, `decode_roundtrip=PASS`, `OVERALL: PASS …` |
-| `stream-capture` (USB) | `stream_frame_size=WxH`, `backend …: SELECTED`, `stream_encoder_backend=…`, `stream_bitrate=… stream_gop=…`, `adb_serial=…`, `adb_forward=tcp:P->tcp:P`, `waiting_for_android_listener=true`, `android_connection=established`, `input_return_channel=enabled\|disabled …`, `streamed_input_frames=… streamed_frames=… streamed_packets=…`, `input_events_injected=N`, `stream_complete=true`, optional `{"streamed_frames":N,"streamed_packets":M,"write_stall_ms_max":X,"input_events_injected":K}` every 60 frames with `--stats-json`, `bitrate_step_down/up old_bitrate=… new_bitrate=…` |
+| `stream-capture` (USB) | `stream_frame_size=WxH`, `backend …: SELECTED`, `stream_encoder_backend=…`, `stream_bitrate=… stream_gop=…`, `adb_serial=…`, `adb_forward=tcp:P->tcp:P`, `waiting_for_android_listener=true`, `android_connection=established`, `input_return_channel=enabled\|disabled …`, `input_target_monitor=…` (stderr, Windows input), `streamed_input_frames=… streamed_frames=… streamed_packets=…`, `input_events_injected=N`, `stream_resolution_change old=WxH new=WxH` (on a Windows mode switch), `stream_complete=true`, optional `{"streamed_frames":N,"streamed_packets":M,"write_stall_ms_max":X,"input_events_injected":K}` every 60 frames with `--stats-json`, `bitrate_step_down/up old_bitrate=… new_bitrate=…` |
 | `stream-capture` (WiFi) | `wifi_device=ip:port`, `wifi_fingerprint=SHA256:…`, `wifi_pin=omitted …` (if skipped), `wifi_encryption=tls-1.3`, `wifi_defaults_applied bitrate=… gop=…` (if defaulted), then same streaming lines as USB |
-| Failures | Exit ≠ 0 + stderr (e.g. missing `--device-ip`, TLS fp mismatch, no BMPs, resolution change → `restart stream`) |
+| Failures | Exit ≠ 0 + stderr (e.g. missing `--device-ip`, TLS fp mismatch, no BMPs) |
 
 ### 4.3 Frame protocol (`protocol/`, `USBD`, v1, LE)
 
@@ -277,9 +330,16 @@ On the wire every packet is `u32LE(total_packet_bytes) + TransportPacket::encode
 | payload_len | 4 | Payload bytes |
 | payload_crc32 | 4 | CRC32 of payload |
 
+> **What is live today:** the packetizer only *frames* fragments. Both transports
+> run over TCP, which already delivers reliably, so **nothing is retransmitted
+> and no heartbeat drives a reconnect.** The primitives below are implemented and
+> unit tested, but are not wired into the streaming paths — they exist for the
+> planned native USB bulk endpoint (no TCP underneath) and to pin the wire
+> contract for packet kinds video-only receivers must ignore. See PRD FR-TR-3/4.
+
 - `Ack` payload: `through_packet_sequence:u64 + missing:u64[]`. `ReceiverAcks::observe` computes contiguous high-water + gaps.
 - `RetransmitWindow` tracks only `FrameFragment`; `expired(now)` lists timed-out packets; `apply_ack` clears acked.
-- `HeartbeatMonitor(timeout, last_seen)` → `is_disconnected` drives reconnect.
+- `HeartbeatMonitor(timeout, last_seen)` → `is_disconnected` (intended to drive reconnect; unused today).
 - `Control` payload = 1+ concatenated 16-byte `InputEvent`s (device→host). `Handshake` payload = opaque JSON (WiFi hello/welcome); video-only receivers ignore non-Fragment kinds.
 
 ### 4.5 Input return channel (device→host, 16 bytes LE, kind-tagged)
@@ -311,7 +371,7 @@ Key (`kind=2`):
 | 4 | 2 | Unicode BMP code point (when named=`char`) |
 | 6 | 10 | reserved |
 
-Reference bytes: pointer `Down/Left/id2 (40000,12345)` → `01 01 00 02 40 9C 39 30 00 00 00 00 00 00 00 00`; key `'A'` down → `02 01 00 00 41 00 00…`. Host maps normalized coords to `MOUSEEVENTF_ABSOLUTE|VIRTUALDESK` (no per-monitor scaling); text via `KEYEVENTF_UNICODE`, named keys via VK.
+Reference bytes: pointer `Down/Left/id2 (40000,12345)` → `01 01 00 02 40 9C 39 30 00 00 00 00 00 00 00 00`; key `'A'` down → `02 01 00 00 41 00 00…`. The host maps normalized coords into the **virtual monitor's rectangle** within the virtual desktop and injects with `MOUSEEVENTF_ABSOLUTE|VIRTUALDESK` (multi-monitor safe; falls back to the whole desktop when the monitor is absent); text via `KEYEVENTF_UNICODE`, named keys via VK.
 
 ### 4.6 Encoder interface (`host/encoder`)
 
@@ -337,16 +397,12 @@ Reference bytes: pointer `Down/Left/id2 (40000,12345)` → `01 01 00 02 40 9C 39
 
 ### 4.9 Control Center GUI (`control-app/`)
 
-- Window: `MainWindow.xaml` 1080×720 (min 900×600), top bar (title, system badge, DEMO MODE flag, admin badge/detail, Refresh), left nav (Dashboard, Driver, Display, Device, Services, Logs, Diagnostics, Settings), page `ContentControl`, first-run overlay (3 steps + Open Diagnostics / Get Started).
-- Pages:
-  - **Dashboard**: giant status text, START/STOP/RESTART, transport combo (usb/wifi) + CONNECT USB / CONNECT WI-FI, WiFi IP/QR-JSON + PIN fields (visible only for wifi), connection note, SHOW PAIRING CODE (PC QR `{"v":1,"host_id":…}` via `QrCodeService` + caption), SIGNAL (`SignalMonitor` 110px pipeline strip), STREAM telemetry line (Consolas; `Latency: N/A (not measured)` is honest), RECENT ACTIVITY list.
-  - **Driver**: package/instance/problem-code status, Install/Uninstall/Restart/Enable-Disable (elevated, confirmed), `verify.ps1` output.
-  - **Display**: `DisplayInfo` list (USBDisplay highlighted), Open Display Settings / Extend (`DisplaySwitch.exe /extend`).
-  - **Device**: adb devices table (serial/state/model/product/transport_id), poll every 5 s, reconnect/restart-server maintenance, path configurable.
-  - **Services**: `ServiceEntry` list — Streamer process (RUNNING/STOPPED + exe/pid/uptime), WUDFRd reflector binding (BOUND/NOT BOUND), ADB server (AVAILABLE). Honest label: streamer/encoder are child **processes**, not Windows services.
-  - **Logs**: ring-buffered stdout/stderr + ETW/event-log excerpts, level filter, export.
-  - **Diagnostics**: one-click full run (`DiagnosticsService`), per-check Pass/Fail + remediation, `SYSTEM READY` vs `N check(s) failed`.
-  - **Settings → Advanced**: streamer/adb/driver-script paths, codec/bitrate/fps/GOP, USB port, transport/device-ip/PIN, capture purge toggles, log level, tray/startup, danger-zone driver management.
+- Window: `MainWindow.xaml` 1080×720 (min 900×600), top bar (title, system badge, DEMO MODE flag, admin badge/detail, Refresh), **three-item left nav (Home, Setup, Advanced)**, page `ContentControl`, first-run overlay (3 steps + Run Diagnostics / Get Started).
+- Pages (three-item shell; the leaf surfaces are unchanged, just grouped):
+  - **Home** = the Dashboard: giant status text, START/STOP/RESTART, transport combo (usb/wifi) + CONNECT USB / CONNECT WI-FI, WiFi IP/QR-JSON + PIN fields (visible only for wifi), connection note, SHOW PAIRING CODE (PC QR `{"v":1,"host_id":…}` via `QrCodeService` + caption), SIGNAL (`SignalMonitor` 110px pipeline strip), STREAM telemetry line (Consolas; `Latency: N/A (not measured)` is honest), RECENT ACTIVITY list.
+  - **Setup** = tabs: **Driver** (package/instance/problem-code status, Install/Uninstall/Restart/Enable-Disable, elevated + confirmed, `verify.ps1` output) and **Device** (adb devices table serial/state/model/product/transport_id, poll every 5 s, reconnect/restart-server maintenance, Wi-Fi trust/security panel). Wi-Fi pairing inputs live on Home only — not duplicated here.
+  - **Advanced** = tabs: **Display** (`DisplayInfo` list, Open Display Settings / Extend), **Services** (`ServiceEntry` list — streamer process, WUDFRd reflector binding, ADB server; honest: child **processes**, not Windows services), **Logs** (ring-buffered stdout/stderr + ETW/event-log excerpts, level filter, export), **Diagnostics** (one-click full run, per-check Pass/Fail + remediation, `SYSTEM READY` vs `N check(s) failed`), **Settings** (streamer/adb/driver-script paths, codec/bitrate/fps/GOP, USB port, transport/device-ip/PIN, capture purge toggles, log level, tray/startup, danger-zone driver management).
+  - `SetupViewModel` / `AdvancedViewModel` are thin containers that re-host the existing leaf view models as tabs; the tray "Diagnostics" action and first-run overlay jump straight to the Diagnostics tab via `AdvancedViewModel.SelectedIndex`.
 - Gateway contract: `IUsbDisplayGateway` (State, Health, StatusMessage, StartupSteps, Telemetry, Driver, Displays, Devices, Processes, ServiceEntries, LastDiagnostics, Capabilities, Settings; `Start/Stop/Restart/RestartComponent/RunDiagnostics/Driver* /OpenDisplaySettings/ExtendDisplays/RunAdbMaintenance/SaveSettings/RefreshAll`). `RealUsbDisplayGateway.StartAsync` gates: driver package → driver loaded → virtual monitor enumerated → streamer binary → device (USB) or device-ip (WiFi) → purge stale captures → `StartStream(live:true, loop:true, --stats-json)` → wait ≤45 s for `connected + streamed_frames increasing` → ACTIVE. `MockUsbDisplayGateway` powers `--demo`.
 - `AppSettings` JSON (`%AppData%\USBDisplay\control-app-settings.json`): `StreamerPath, AdbPath, DriverScriptsDir, Codec=h264, BitrateBps=20000000, Fps=60, Gop=60, UsbPort=27183, Transport=usb, DeviceIp=, Pin=, LaunchAtStartup, MinimizeToTray=true, ConfirmBeforeStop=true, ConfirmDestructive=true, LogLevel=Info, DemoMode, AutoPurgeCapture=true, CapturePurgeAgeSeconds=300, CaptureWarnMb=512, FirstRunDone, AutoStartStreaming, DevicePollSeconds=5`.
 - `StreamTelemetry` record: `StreamedFrames, StreamedPackets, WriteStallMsMax, InputEventsInjected, Fps, Codec, Resolution, EncoderBackend, BitrateBps, DroppedFrames, CrcFailures, Reconnects, UpdatedAt`. `StreamStartOptions(Transport, Codec, BitrateBps, Fps, Gop, UsbPort, Serial?, DeviceIp?, Pin?, Live, Loop)` → CLI args (no shell strings; `ProcessStartInfo` array).
@@ -423,6 +479,11 @@ Tablet switches to USBDisplay fullscreen surface.
 
 ### 5.8 Stream to Android over USB (ADB path)
 
+> **Frames must come from `--input-dir`.** Virtual-monitor frames never reach the
+> host process today (the capture handoff is unimplemented — see the banner at
+> the top), so the default capture directory is empty and this command exits
+> immediately. Point `--input-dir` at your own 32-bpp top-down BMPs instead.
+
 1. Install/open app, confirm `adb devices` shows `device`.
 2. Start host streaming:
 
@@ -434,9 +495,12 @@ cargo run -p usbdisplay-streamer -- stream-capture `
 
 Live mode is default (newest-frame-wins, backlog purged, wall-clock PTS). Flags: `--serial`, `--port` (default 27183), `--max-frames N`, `--no-live` (ordered replay), `--stats-json`.
 
-Expect `android_connection=established` and decoded frames on tablet. Transport is USB (`adb` cable), not WiFi.
+Expect `android_connection=established` and decoded frames on the tablet — **once frames are present in `--input-dir`**. Transport is USB (`adb` cable), not WiFi.
 
 ### 5.9 Stream over WiFi LAN (TLS + PIN)
+
+> Same caveat as 5.8: supply frames via `--input-dir`; the virtual monitor does
+> not produce them yet.
 
 USB stays default. Same LAN, non-isolated SSID (see `docs/wifi.md`):
 
@@ -475,7 +539,7 @@ Dashboard → START USB DISPLAY runs the same gated orchestration as the CLI pat
 - `dotnet test USBDisplay.sln`: CLI/adb/pnputil parsing, telemetry, settings round-trip, log service, crash bounds, start/stop machine, pairing QR, capture monitor.
 - Integration/system (need hardware): ADB loop, decoder recovery after drops, unplug reconnect, suspend/resume, 1080p60 USB2, 1440p120 USB3, multi-monitor/tablet, rotation/resolution switch, Extend/Duplicate.
 - Perf gates: USB2 1080p60 <35 ms glass-to-glass, USB3 1440p120 <20 ms, host CPU <10%, GPU <15%, RAM <250 MB; WiFi 1080p60 <80 ms p50 / <120 ms p95, 5-min soak no disconnect, adaptation lines under loss, input round-trip via `input_events_injected`, pairing gates (wrong PIN rejected, rotated cert rejected with fp guidance, trusted reconnect skips PIN, AP-isolated prints guidance).
-- CI (`.github/workflows/`): **Rust** on `ubuntu-latest + windows-latest` (Linux = portable fallbacks, Windows = real MF encoder + `SendInput` path) + non-blocking `fmt --check`/`clippy` lint; **Android** on JDK 17 (`testDebugUnitTest` + `assembleDebug` + APK artifact).
+- CI (`.github/workflows/`): **Rust** on `ubuntu-latest + windows-latest` (Linux = portable fallbacks, Windows = real MF encoder + `SendInput` path) + non-blocking `fmt --check`/`clippy` lint; **Android** on JDK 17 (`testDebugUnitTest` + `assembleDebug` + APK artifact); **Control Center** on `windows-latest` (`dotnet build` + `dotnet test`). A `v*` tag additionally builds the release assets — see §8.
 
 ---
 
@@ -485,19 +549,40 @@ Dashboard → START USB DISPLAY runs the same gated orchestration as the CLI pat
 |---|---|
 | `pnputil` says up-to-date but driver unchanged | Bump INF `DriverVer` or run `uninstall.ps1` first — PnP keys store on version. |
 | UMDF host crashes in System log | Check install date: pre-fix crashes are stale. Current loop has try/catch + adapter guard; collect `capture-crash.ps1` + DebugView TraceLogging. |
-| `no capture_*.bmp` | Driver diagnostics only — ensure capture staging enabled / path `%ProgramData%\USBDisplay\capture` readable (ACL repair is elevated). |
-| `capture size changed … restart stream` | Mode switch mid-stream; restart `stream-capture` (encoders are fixed-size today). |
+| `no capture_*.bmp frames found` / `waiting_for_capture_frames=true` | **Expected today.** The driver writes no capture files and the in-memory handoff is not implemented — see the banner at the top. Nothing to fix on your side; supply your own frames via `--input-dir` to exercise the pipeline. |
+| `capture size changed …` no longer occurs | A Windows mode switch now rebuilds the encoder live (`stream_resolution_change old=… new=…`). If the tablet stays black after one, restart `stream-capture`. |
 | `adb device unauthorized/offline` | Unlock tablet, accept prompt, `adb reconnect` / restart server from Device page. |
-| `No frames received within 45 s` | Check capture dir, `stream_encoder_backend=` in Logs, tablet screen, firewall for WiFi. |
+| `No frames received within 45 s` | Almost always the missing capture handoff (see the banner at the top). Otherwise check `stream_encoder_backend=` in Logs, the tablet screen, and the firewall for Wi-Fi. |
 | WiFi `host unreachable … use USB` | AP-isolated/guest WLAN — use non-isolated SSID, hotspot, or USB. Never silently falls back. |
 | Wrong PIN / cert mismatch | Re-read current PIN/QR on tablet; rotated cert requires re-scan + PIN; TOFU is `%AppData%\USBDisplay\paired.json`. |
 | Streamer crash loop | Bounded to 3 auto-restarts then Error — see Logs → Diagnostics. Stop never uninstalls driver. |
 
 ---
 
-## 8. Continuous Integration
+## 8. Continuous Integration & Releases
 
-GitHub Actions on every push/PR: Rust workspace build+test (Ubuntu + Windows) and Android unit tests + debug APK. Lint job is informational until formatting/clippy debt is cleared.
+**On every push/PR** (`.github/workflows/`): Rust workspace build+test on Ubuntu
++ Windows (`rust.yml`), Android `testDebugUnitTest` + `assembleDebug` (`android.yml`),
+and the Control Center MSTest suite on `windows-latest` (`dotnet.yml`). The Rust
+lint job is informational until formatting/clippy debt is cleared.
+
+**On a `v*` tag** (`release.yml`): builds and attaches these to a GitHub Release —
+
+| Asset | How it is produced | Runs with |
+|---|---|---|
+| `usbdisplay-control-center-<ver>-win-x64.zip` | `dotnet publish` self-contained, single-file, win-x64 | No .NET install needed |
+| `usbdisplay-streamer-<ver>-win-x64.zip` | `cargo build --release -p usbdisplay-streamer` | Standalone `.exe` |
+| `usbdisplay-android-<ver>.apk` | `gradlew assembleDebug` (debug-signed, directly installable) | Android 8.0+ |
+| `usbdisplay-driver-scripts.zip` | Sources + INF + `*.ps1` for the IDD | Needs WDK; test-signed locally |
+
+The IDD itself is **not** built in CI — it needs the Windows Driver Kit and, for
+anything beyond a test-signed machine, a real signing certificate. Releasing a
+WHQL-signed package is tracked in `docs/review-findings.md` (6.2). A Play-ready
+APK likewise needs a keystore supplied via release secrets; the shipped APK is
+debug-signed so it installs without ceremony.
+
+Version drift across Cargo/MSBuild/Gradle/INF is reported by
+`scripts/check-versions.ps1` against the root `VERSION` file.
 
 ## 9. Non-Goals
 
@@ -508,4 +593,8 @@ GitHub Actions on every push/PR: Rust workspace build+test (Ubuntu + Windows) an
 
 ## 10. License
 
-Licensed under `Apache-2.0 OR MIT` (see `Cargo.toml`). Driver/GUI subcomponents follow their own project files where noted.
+Dual-licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT)
+at your option. Bundled third-party components are summarized in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). See [`SECURITY.md`](SECURITY.md)
+for the security model and reporting, and [`CONTRIBUTING.md`](CONTRIBUTING.md) to
+get started. The IDD driver builds against the Microsoft WDK under its own terms.

@@ -94,7 +94,9 @@ OVERALL: PASS -- captured frames encoded and validated
 ## Not yet implemented
 
 - NVENC / Quick Sync / AMF real backends (behind the same trait + probe chain).
-- Live shared-memory frame boundary from the driver (this milestone reads the
-  on-disk capture frames).
+- Live shared-memory frame boundary from the driver. On-disk capture was removed
+  from the driver (`360fb90`) and the in-memory handoff is not built, so the
+  encoder currently has **no** feed from the virtual monitor — supply frames with
+  `--input-dir`.
 - H.265 validated end to end (the path exists; H.264 is the validated default).
 - Bitrate / GOP / scene-change tuning and rate-control modes.

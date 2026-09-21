@@ -29,31 +29,10 @@
     </Border>
     <Border Style="{StaticResource CardBorder}">
       <StackPanel>
-        <TextBlock Text="WI-FI PAIRING (TLS 1.3 + PIN)" FontSize="18" FontWeight="Bold"/>
-        <TextBlock Text="Alternative to USB. On the tablet open WiFi Pair: note the LAN IP, the 6-digit PIN, and the QR. You can type the bare IP or paste the full QR JSON below."
-                   Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,4,0,8"/>
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Text="Tablet IP / QR JSON:" Width="150" VerticalAlignment="Center"/>
-          <TextBox Text="{Binding Settings.DeviceIp, UpdateSourceTrigger=PropertyChanged}" Width="300"/>
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-          <TextBlock Text="Pairing PIN:" Width="150" VerticalAlignment="Center"/>
-          <TextBox Text="{Binding Settings.Pin, UpdateSourceTrigger=PropertyChanged}" Width="140"/>
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-          <Button Content="CONNECT VIA WI-FI" Style="{StaticResource PrimaryButton}" Command="{Binding ConnectWifi}"/>
-          <Button Content="FORGET DEVICE" Command="{Binding ForgetTrust}"/>
-        </StackPanel>
-        <TextBlock Text="First pairing needs the current PIN. Reconnects from this PC skip the PIN (trusted host) but still verify the certificate fingerprint. Wrong PIN 3 times locks the tablet for 30 s."
-                   Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-      </StackPanel>
-    </Border>
-    <Border Style="{StaticResource CardBorder}">
-      <StackPanel>
         <TextBlock Text="WI-FI SECURITY / TRUST" FontSize="18" FontWeight="Bold"/>
         <TextBlock Text="{Binding WifiTrustDetail}" TextWrapping="Wrap" Margin="0,4,0,0"/>
         <TextBlock Text="{Binding WifiSecurity}" Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-        <TextBlock Text="If the fingerprint changes, the connection is refused with expected-vs-received detail. Use FORGET DEVICE + re-pair — never auto-accept."
+        <TextBlock Text="Wi-Fi pairing (LAN IP, PIN, QR) lives on the Home page. If the fingerprint changes, the connection is refused with expected-vs-received detail — use FORGET DEVICE + re-pair, never auto-accept."
                    Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,4,0,0"/>
       </StackPanel>
     </Border>

@@ -81,13 +81,13 @@ public partial class App : Application
             Visible = true,
         };
         var menu = new System.Windows.Forms.ContextMenuStrip();
-        menu.Items.Add("Open Dashboard", null, (_, _) => { window.Show(); window.Activate(); });
+        menu.Items.Add("Open", null, (_, _) => { window.Show(); window.Activate(); });
         menu.Items.Add("Stop Display", null, async (_, _) => await gateway.StopAsync());
         menu.Items.Add("Restart", null, async (_, _) => await gateway.RestartAsync());
         menu.Items.Add("Diagnostics", null, async (_, _) =>
         {
             window.Show();
-            _main.CurrentPage = "Diagnostics";
+            _main.ShowDiagnostics.Execute(null);
             await gateway.RunDiagnosticsAsync();
         });
         menu.Items.Add("Exit", null, (_, _) =>

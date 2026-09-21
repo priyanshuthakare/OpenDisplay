@@ -243,7 +243,7 @@ impl TransportPacket {
                 bytes: self.payload,
             })),
             PacketKind::Ack => {
-                if self.payload.len() < 8 || self.payload.len() % 8 != 0 {
+                if self.payload.len() < 8 || !self.payload.len().is_multiple_of(8) {
                     return Err(TransportError::InvalidAckPayload);
                 }
                 let through_packet_sequence = u64_at(&self.payload, 0);
@@ -290,15 +290,14 @@ impl Packetizer {
         Ok(fragments
             .into_iter()
             .map(|fragment| {
-                let packet = TransportPacket::new(
+                TransportPacket::new(
                     PacketKind::FrameFragment,
                     self.take_sequence(),
                     fragment.frame_sequence,
                     fragment.index,
                     fragment.total,
                     fragment.bytes,
-                );
-                packet
+                )
             })
             .collect())
     }
@@ -321,6 +320,24 @@ impl Packetizer {
         sequence
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reliability primitives (ReassemblyBuffer, RetransmitWindow, ReceiverAcks,
+// HeartbeatMonitor, and the Ack/Heartbeat/KeyframeRequest constructors).
+//
+// These are NOT wired into the live streaming paths. Both USB (ADB) and Wi-Fi
+// run over TCP, which already guarantees ordered, reliable delivery, so the
+// packetizer only *frames* fragments — nothing is ever retransmitted and no
+// heartbeat drives a reconnect today.
+//
+// They are kept, and unit tested, because PRD FR-TR-4 requires them for a
+// transport without TCP underneath (the planned native USB bulk endpoint), and
+// because they pin the wire contract for the Ack/Heartbeat packet kinds that
+// video-only receivers must ignore (FR-TR-3).
+//
+// Reading this to understand live behaviour? There is no retransmission and no
+// heartbeat-driven reconnect. See Packetizer::packetize_frame for what is real.
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct ReassemblyBuffer {

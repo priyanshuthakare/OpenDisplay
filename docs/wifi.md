@@ -104,7 +104,8 @@ Fix: use a non-isolated SSID, phone hotspot, or USB (`--transport usb`).
   counts via `AtomicU64`). Ladder `20→12→8→4 Mbps`; step down when p95 stall
   >50 ms over a 60-frame window **or** >2 KF in window (≈>2/s at 60 fps);
   step back up after 600 clean frames. Encoder re-created via `select_encoder`
-  (same codec/resolution); resolution change keeps bail-and-restart.
+  (same codec/resolution); a resolution change rebuilds the encoder too and
+  logs `stream_resolution_change old=WxH new=WxH` instead of stopping.
   Logs `bitrate_step_down old_bitrate=… new_bitrate=…` /
   `bitrate_step_up …` (parseable `key=value`).
 - `--stats-json`: every 60 frames

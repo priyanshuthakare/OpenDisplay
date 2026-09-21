@@ -1,0 +1,41 @@
+name: ControlApp
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: build & test
+    # The Control Center targets net8.0-windows (WPF + WinForms), so it only
+    # builds on a Windows runner.
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: control-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore USBDisplay.sln
+
+      - name: Build
+        run: dotnet build USBDisplay.sln --no-restore -c Release
+
+      - name: Test
+        run: dotnet test USBDisplay.sln --no-build -c Release --logger "trx;LogFileName=results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controlapp-test-results
+          path: control-app/**/TestResults/*.trx
+          if-no-files-found: ignore

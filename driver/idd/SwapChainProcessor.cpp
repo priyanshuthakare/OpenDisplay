@@ -1,10 +1,12 @@
 #include "SwapChainProcessor.h"
+
 #include "Trace.h"
 
 #include <avrt.h>
 #include <utility>
 
 using Microsoft::WRL::ComPtr;
+
 
 namespace UsbDisplay
 {

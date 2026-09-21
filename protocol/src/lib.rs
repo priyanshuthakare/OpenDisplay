@@ -126,6 +126,7 @@ pub enum ProtocolError {
 }
 
 impl EncodedFrame {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sequence: u64,
         timestamp_ns: u64,
