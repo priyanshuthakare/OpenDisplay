@@ -321,6 +321,24 @@ impl Packetizer {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reliability primitives (ReassemblyBuffer, RetransmitWindow, ReceiverAcks,
+// HeartbeatMonitor, and the Ack/Heartbeat/KeyframeRequest constructors).
+//
+// These are NOT wired into the live streaming paths. Both USB (ADB) and Wi-Fi
+// run over TCP, which already guarantees ordered, reliable delivery, so the
+// packetizer only *frames* fragments — nothing is ever retransmitted and no
+// heartbeat drives a reconnect today.
+//
+// They are kept, and unit tested, because PRD FR-TR-4 requires them for a
+// transport without TCP underneath (the planned native USB bulk endpoint), and
+// because they pin the wire contract for the Ack/Heartbeat packet kinds that
+// video-only receivers must ignore (FR-TR-3).
+//
+// Reading this to understand live behaviour? There is no retransmission and no
+// heartbeat-driven reconnect. See Packetizer::packetize_frame for what is real.
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone)]
 pub struct ReassemblyBuffer {
     frame_sequence: u64,

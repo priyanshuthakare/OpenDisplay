@@ -268,9 +268,9 @@ cargo run -p usbdisplay-streamer -- stream-capture --transport wifi --device-ip 
 | `probe-frame` | `probe_frame_bytes=N`, `payload_crc32=0x…` |
 | `transport-probe` | `transport_packets=N`, `transport_bytes=N`, `max_packet_payload=N` |
 | `encode-capture` | `encoder_backend=MediaFoundation`, `encoded_units=N`, `nal_total=N sps=… pps=… vps=… idr=N non_idr=N`, `stream_playable=true`, `transport_packets=N`, `decoded_frames=N decoded_size=WxH`, `decode_roundtrip=PASS`, `OVERALL: PASS …` |
-| `stream-capture` (USB) | `stream_frame_size=WxH`, `backend …: SELECTED`, `stream_encoder_backend=…`, `stream_bitrate=… stream_gop=…`, `adb_serial=…`, `adb_forward=tcp:P->tcp:P`, `waiting_for_android_listener=true`, `android_connection=established`, `input_return_channel=enabled\|disabled …`, `streamed_input_frames=… streamed_frames=… streamed_packets=…`, `input_events_injected=N`, `stream_complete=true`, optional `{"streamed_frames":N,"streamed_packets":M,"write_stall_ms_max":X,"input_events_injected":K}` every 60 frames with `--stats-json`, `bitrate_step_down/up old_bitrate=… new_bitrate=…` |
+| `stream-capture` (USB) | `stream_frame_size=WxH`, `backend …: SELECTED`, `stream_encoder_backend=…`, `stream_bitrate=… stream_gop=…`, `adb_serial=…`, `adb_forward=tcp:P->tcp:P`, `waiting_for_android_listener=true`, `android_connection=established`, `input_return_channel=enabled\|disabled …`, `input_target_monitor=…` (stderr, Windows input), `streamed_input_frames=… streamed_frames=… streamed_packets=…`, `input_events_injected=N`, `stream_resolution_change old=WxH new=WxH` (on a Windows mode switch), `stream_complete=true`, optional `{"streamed_frames":N,"streamed_packets":M,"write_stall_ms_max":X,"input_events_injected":K}` every 60 frames with `--stats-json`, `bitrate_step_down/up old_bitrate=… new_bitrate=…` |
 | `stream-capture` (WiFi) | `wifi_device=ip:port`, `wifi_fingerprint=SHA256:…`, `wifi_pin=omitted …` (if skipped), `wifi_encryption=tls-1.3`, `wifi_defaults_applied bitrate=… gop=…` (if defaulted), then same streaming lines as USB |
-| Failures | Exit ≠ 0 + stderr (e.g. missing `--device-ip`, TLS fp mismatch, no BMPs, resolution change → `restart stream`) |
+| Failures | Exit ≠ 0 + stderr (e.g. missing `--device-ip`, TLS fp mismatch, no BMPs) |
 
 ### 4.3 Frame protocol (`protocol/`, `USBD`, v1, LE)
 
@@ -311,9 +311,16 @@ On the wire every packet is `u32LE(total_packet_bytes) + TransportPacket::encode
 | payload_len | 4 | Payload bytes |
 | payload_crc32 | 4 | CRC32 of payload |
 
+> **What is live today:** the packetizer only *frames* fragments. Both transports
+> run over TCP, which already delivers reliably, so **nothing is retransmitted
+> and no heartbeat drives a reconnect.** The primitives below are implemented and
+> unit tested, but are not wired into the streaming paths — they exist for the
+> planned native USB bulk endpoint (no TCP underneath) and to pin the wire
+> contract for packet kinds video-only receivers must ignore. See PRD FR-TR-3/4.
+
 - `Ack` payload: `through_packet_sequence:u64 + missing:u64[]`. `ReceiverAcks::observe` computes contiguous high-water + gaps.
 - `RetransmitWindow` tracks only `FrameFragment`; `expired(now)` lists timed-out packets; `apply_ack` clears acked.
-- `HeartbeatMonitor(timeout, last_seen)` → `is_disconnected` drives reconnect.
+- `HeartbeatMonitor(timeout, last_seen)` → `is_disconnected` (intended to drive reconnect; unused today).
 - `Control` payload = 1+ concatenated 16-byte `InputEvent`s (device→host). `Handshake` payload = opaque JSON (WiFi hello/welcome); video-only receivers ignore non-Fragment kinds.
 
 ### 4.5 Input return channel (device→host, 16 bytes LE, kind-tagged)
@@ -516,7 +523,7 @@ Dashboard → START USB DISPLAY runs the same gated orchestration as the CLI pat
 | `pnputil` says up-to-date but driver unchanged | Bump INF `DriverVer` or run `uninstall.ps1` first — PnP keys store on version. |
 | UMDF host crashes in System log | Check install date: pre-fix crashes are stale. Current loop has try/catch + adapter guard; collect `capture-crash.ps1` + DebugView TraceLogging. |
 | `no capture_*.bmp` | Driver diagnostics only — ensure capture staging enabled / path `%ProgramData%\USBDisplay\capture` readable (ACL repair is elevated). |
-| `capture size changed … restart stream` | Mode switch mid-stream; restart `stream-capture` (encoders are fixed-size today). |
+| `capture size changed …` no longer occurs | A Windows mode switch now rebuilds the encoder live (`stream_resolution_change old=… new=…`). If the tablet stays black after one, restart `stream-capture`. |
 | `adb device unauthorized/offline` | Unlock tablet, accept prompt, `adb reconnect` / restart server from Device page. |
 | `No frames received within 45 s` | Check capture dir, `stream_encoder_backend=` in Logs, tablet screen, firewall for WiFi. |
 | WiFi `host unreachable … use USB` | AP-isolated/guest WLAN — use non-isolated SSID, hotspot, or USB. Never silently falls back. |

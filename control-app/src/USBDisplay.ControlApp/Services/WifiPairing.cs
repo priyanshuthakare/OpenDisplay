@@ -21,12 +21,28 @@ public sealed record WifiPairPayload(string Ip, int Port, string? Fingerprint)
         if (string.IsNullOrWhiteSpace(raw)) throw new ArgumentException("Empty device target.");
         if (raw.StartsWith("{", StringComparison.Ordinal))
         {
-            using var doc = JsonDocument.Parse(raw);
-            var root = doc.RootElement;
+            JsonElement root;
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                root = doc.RootElement.Clone();
+            }
+            catch (JsonException ex)
+            {
+                throw new ArgumentException($"QR JSON is malformed: {ex.Message}");
+            }
+
+            // The payload is versioned; accept only what we understand rather
+            // than silently ignoring the field (the tablet enforces the same).
+            if (!root.TryGetProperty("v", out var vEl) || !vEl.TryGetInt32(out var version) || version != 1)
+            {
+                throw new ArgumentException("Unsupported QR payload version (expected \"v\":1).");
+            }
             if (!root.TryGetProperty("ip", out var ipEl)) throw new ArgumentException("QR JSON missing \"ip\".");
             var ip = ipEl.GetString()?.Trim() ?? "";
             var port = defaultPort;
             if (root.TryGetProperty("port", out var portEl) && portEl.TryGetInt32(out var p)) port = p;
+            if (port is < 1 or > 65535) throw new ArgumentException($"Port out of range: {port}.");
             string? fp = null;
             if (root.TryGetProperty("fp", out var fpEl)) fp = fpEl.GetString();
             ValidateIp(ip);

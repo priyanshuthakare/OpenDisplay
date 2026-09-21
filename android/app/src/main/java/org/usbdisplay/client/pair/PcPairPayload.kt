@@ -1,5 +1,8 @@
 package org.usbdisplay.client.pair
 
+import org.json.JSONException
+import org.json.JSONObject
+
 /**
  * PC pairing-code payload shown by the Windows control app and scanned by
  * the tablet: `{"v":1,"host_id":"host-…"}`.
@@ -15,8 +18,16 @@ object PcPairPayload {
     private const val MAX_LEN = 64
 
     fun parseHostId(json: String): String? {
-        if (!json.contains("\"v\":$VERSION")) return null
-        val hostId = extractString(json, "\"host_id\"") ?: return null
+        // Real JSON parsing: a `contains("\"v\":1")` check would also accept
+        // `"v":10`, and index scanning can match a key name nested in a value.
+        val obj = try {
+            JSONObject(json)
+        } catch (_: JSONException) {
+            return null
+        }
+        if (obj.optInt("v", -1) != VERSION) return null
+        val hostId = obj.optString("host_id", "").takeIf { it.isNotEmpty() && it != "null" }
+            ?: return null
         if (!isValidHostId(hostId)) return null
         return hostId
     }
@@ -26,18 +37,5 @@ object PcPairPayload {
         if (!hostId.startsWith(PREFIX)) return false
         if (hostId.length > MAX_LEN) return false
         return hostId.drop(PREFIX.length).all { it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
-    }
-
-    private fun extractString(json: String, key: String): String? {
-        val keyIndex = json.indexOf(key)
-        if (keyIndex < 0) return null
-        val afterKey = json.substring(keyIndex + key.length)
-        val colon = afterKey.indexOf(':')
-        if (colon < 0) return null
-        val afterColon = afterKey.substring(colon + 1).trimStart()
-        if (!afterColon.startsWith('"')) return null
-        val end = afterColon.indexOf('"', 1)
-        if (end < 0) return null
-        return afterColon.substring(1, end)
     }
 }

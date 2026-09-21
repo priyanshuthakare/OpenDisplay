@@ -29,6 +29,30 @@ or security-behavior changes.
 - `scripts/setup.ps1` — prerequisite check and guided build.
 - `scripts/check-versions.ps1` + `VERSION` — component version drift report.
 
+### Fixed
+
+- **Multi-monitor input landed on the wrong screen** (review 4.1). Tablet
+  coordinates were mapped across the *entire virtual desktop* instead of the
+  virtual monitor, so touch was offset whenever more than one display was
+  active. The host now resolves the `USBDisplay` monitor via
+  `EnumDisplayMonitors`/`GetMonitorInfoW` — matched on the driver's EDID
+  friendly name — and maps into its rectangle, refreshing once a second so a
+  mode switch is absorbed. Falls back to the previous whole-desktop mapping if
+  the monitor is absent.
+- **A Windows mode switch killed the stream** (review 2.4).
+  `stream-capture` aborted with "capture size changed … restart stream" on any
+  resolution change. The encoder is now rebuilt at the new size and the sender
+  retagged, emitting `stream_resolution_change old=WxH new=WxH`. Applied to
+  both live and replay paths, on USB and Wi-Fi.
+- **Pairing payloads accepted the wrong version** (review 5.3).
+  `PcPairPayload`/`PairPayload` checked the version with
+  `String.contains("\"v\":1")`, which also matches `"v":10`, and their
+  `indexOf` helpers could latch onto a key name inside another value. Both now
+  parse with `org.json` and compare the version exactly.
+  `WifiPairPayload.Parse` (C#) ignored the `v` field entirely and skipped the
+  port range check on its JSON branch; both are now enforced. Regression tests
+  added on all three sides.
+
 ### Changed
 
 - **Control Center shell simplified from eight pages to three** — *Home*

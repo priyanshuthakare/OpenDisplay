@@ -63,4 +63,19 @@ class PairPayloadTest {
         // Port extraction fails for out-of-range values
         assertEquals(null, info?.port)
     }
+
+    @Test
+    fun rejectsAVersionThatMerelyPrefixesTheExpectedOne() {
+        // Regression: a `contains("\"v\":1")` check accepted this, because the
+        // string `"v":10` starts with `"v":1`.
+        val json = """{"v":10,"ip":"192.168.1.42","port":27184}"""
+        assertNull(PairPayload.decode(json))
+    }
+
+    @Test
+    fun rejectsPayloadsThatAreNotJson() {
+        assertNull(PairPayload.decode("not json at all"))
+        assertNull(PairPayload.decode(""))
+        assertNull(PairPayload.decode("""{"v":1,"ip":"""))
+    }
 }

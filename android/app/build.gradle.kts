@@ -38,4 +38,8 @@ dependencies {
     // BouncyCastle in-memory + persist DER in private prefs (documented in docs/wifi.md).
     implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
     testImplementation("junit:junit:4.13.2")
+    // android.jar's org.json is a stub that throws "Stub!" in JVM unit tests.
+    // This supplies the real implementation so pairing-payload parsing is
+    // actually exercised by testDebugUnitTest.
+    testImplementation("org.json:json:20231013")
 }

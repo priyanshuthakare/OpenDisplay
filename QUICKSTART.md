@@ -145,7 +145,7 @@ device-to-PC connections; use a normal home network, a hotspot, or USB.
 | `pnputil` says "up to date" but nothing changed | Bump `DriverVer` in `driver/idd/Driver.inf` or run `uninstall.ps1` first. |
 | Tablet shows `unauthorized` in `adb devices` | Unlock the tablet and accept the USB debugging prompt. |
 | "No frames received within 45 s" | Check Advanced → Logs for `stream_encoder_backend=`, and that the tablet app is open. |
-| Changed resolution, stream stopped | Encoders are fixed-size today — press **RESTART** in Control Center. |
+| Changed resolution briefly froze the tablet | Expected — the host rebuilds the encoder at the new size (`stream_resolution_change`). If it stays black, press **RESTART**. |
 | Wi-Fi says "host unreachable … use USB" | AP-isolated/guest network. Use a normal SSID, hotspot, or USB. |
 
 ---
