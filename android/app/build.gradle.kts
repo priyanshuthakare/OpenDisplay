@@ -36,7 +36,7 @@ dependencies {
     // Self-signed ECDSA P-256 cert generation for WiFi TLS (PR-3).
     // AndroidKeyStore cannot mint TLS server certs directly, so we use
     // BouncyCastle in-memory + persist DER in private prefs (documented in docs/wifi.md).
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
     testImplementation("junit:junit:4.13.2")
     // android.jar's org.json is a stub that throws "Stub!" in JVM unit tests.
     // This supplies the real implementation so pairing-payload parsing is
