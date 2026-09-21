@@ -35,7 +35,7 @@ No cloud. No account. No telemetry.
 
 ## 1. Download a release
 
-Grab the latest from **[Releases](https://github.com/priyanshuthakare/USBdisplay/releases)**:
+Grab the latest from **[Releases](https://github.com/priyanshuthakare/OpenDisplay/releases)**:
 
 | File | What it is |
 |---|---|
@@ -153,7 +153,7 @@ device-to-PC connections; use a normal home network, a hotspot, or USB.
 ## Building from source
 
 ```powershell
-git clone https://github.com/priyanshuthakare/USBdisplay
+git clone https://github.com/priyanshuthakare/OpenDisplay
 cd USBdisplay
 .\scripts\setup.ps1          # checks prerequisites, then builds what it can
 ```

@@ -1,7 +1,7 @@
 # USBDisplay
 
-[![Rust](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/rust.yml/badge.svg)](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/rust.yml)
-[![Android](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/android.yml/badge.svg)](https://github.com/priyanshuthakare/USBdisplay/actions/workflows/android.yml)
+[![Rust](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/rust.yml/badge.svg)](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/rust.yml)
+[![Android](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/android.yml/badge.svg)](https://github.com/priyanshuthakare/OpenDisplay/actions/workflows/android.yml)
 
 USBDisplay is an open-source Windows-to-Android secondary display stack designed for **USB-first** operation, with **WiFi LAN (TLS 1.3 + PIN)** as an alternative transport.
 
@@ -29,12 +29,12 @@ Windows Display Stack → IDD (USBDisplay monitor) → Capture (swap-chain readb
 **Just want to use it?** → **[QUICKSTART.md](QUICKSTART.md)** walks through the
 driver, the tablet app, and streaming in about ten minutes. Prebuilt,
 no-compile-needed artifacts are on the
-[Releases](https://github.com/priyanshuthakare/USBdisplay/releases) page.
+[Releases](https://github.com/priyanshuthakare/OpenDisplay/releases) page.
 
 **Building from source?**
 
 ```powershell
-git clone https://github.com/priyanshuthakare/USBdisplay
+git clone https://github.com/priyanshuthakare/OpenDisplay
 cd USBdisplay
 .\scripts\setup.ps1 -Check   # report which toolchains are present
 .\scripts\setup.ps1          # build + test everything available

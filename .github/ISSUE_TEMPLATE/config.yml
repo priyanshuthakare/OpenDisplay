@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Installation help / how do I start?
-    url: https://github.com/priyanshuthakare/USBdisplay/blob/master/QUICKSTART.md
+    url: https://github.com/priyanshuthakare/OpenDisplay/blob/master/QUICKSTART.md
     about: Driver, APK, streaming, and Wi-Fi pairing walkthrough with troubleshooting.
   - name: Known limitations
-    url: https://github.com/priyanshuthakare/USBdisplay/blob/master/docs/review-findings.md
+    url: https://github.com/priyanshuthakare/OpenDisplay/blob/master/docs/review-findings.md
     about: What is deliberately unfinished — check here before filing a bug.
   - name: Security issue
-    url: https://github.com/priyanshuthakare/USBdisplay/security/advisories/new
+    url: https://github.com/priyanshuthakare/OpenDisplay/security/advisories/new
     about: Report vulnerabilities privately, not as a public issue.

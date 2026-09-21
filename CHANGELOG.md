@@ -61,4 +61,4 @@ test-signed driver (no WHQL), ADB-based USB transport (no native bulk), Wi-Fi
 hardening items (PIN pairing window, per-host input consent, key/PIN storage),
 vendor encoder backends as stubs, and no stylus/pen input.
 
-[Unreleased]: https://github.com/priyanshuthakare/USBdisplay/commits/master
+[Unreleased]: https://github.com/priyanshuthakare/OpenDisplay/commits/master

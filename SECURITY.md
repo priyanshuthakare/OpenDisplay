@@ -10,7 +10,7 @@ Please report suspected security issues **privately** — do not open a public
 issue for anything exploitable.
 
 - Use GitHub's private vulnerability reporting:
-  <https://github.com/priyanshuthakare/USBdisplay/security/advisories/new>
+  <https://github.com/priyanshuthakare/OpenDisplay/security/advisories/new>
 - Include a description, affected component (driver / host / android /
   control-app), reproduction steps, and impact.
 
