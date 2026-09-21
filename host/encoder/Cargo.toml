@@ -9,7 +9,7 @@ thiserror = "1.0"
 usbdisplay-protocol = { path = "../../protocol" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
