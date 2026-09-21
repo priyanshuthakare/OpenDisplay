@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Rust workspace (protocol, transport, host/encoder, host/streamer)
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Control Center (.NET 8 / WPF)
+  - package-ecosystem: nuget
+    directory: "/control-app"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      nuget-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Android client (Gradle)
+  - package-ecosystem: gradle
+    directory: "/android"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # GitHub Actions used by the workflows
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

@@ -1,8 +1,8 @@
 #include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION 0,2,0,1
+ PRODUCTVERSION 0,2,0,1
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -19,11 +19,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "USBDisplay"
             VALUE "FileDescription", "USBDisplay Indirect Display Driver"
-            VALUE "FileVersion", "0.1.0.0"
+            VALUE "FileVersion", "0.2.0.1"
             VALUE "InternalName", "USBDisplayIdd.dll"
             VALUE "OriginalFilename", "USBDisplayIdd.dll"
             VALUE "ProductName", "USBDisplay"
-            VALUE "ProductVersion", "0.1.0.0"
+            VALUE "ProductVersion", "0.2.0.1"
         END
     END
     BLOCK "VarFileInfo"

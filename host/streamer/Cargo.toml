@@ -31,4 +31,3 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 tempfile = "3"
-usbdisplay-encoder = { path = "../encoder" }

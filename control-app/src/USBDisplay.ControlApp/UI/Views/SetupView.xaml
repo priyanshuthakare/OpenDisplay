@@ -1,0 +1,18 @@
+<UserControl x:Class="USBDisplay.ControlApp.UI.Views.SetupView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:USBDisplay.ControlApp.UI.Views">
+  <StackPanel>
+    <TextBlock Text="Setup" FontSize="22" FontWeight="Bold" Margin="4,4,0,4"/>
+    <TextBlock Text="Install the virtual display driver, then connect your Android device."
+               Foreground="{StaticResource Dim}" TextWrapping="Wrap" Margin="4,0,0,8"/>
+    <TabControl>
+      <TabItem Header="Driver">
+        <views:DriverView DataContext="{Binding Driver}"/>
+      </TabItem>
+      <TabItem Header="Device">
+        <views:DeviceView DataContext="{Binding Device}"/>
+      </TabItem>
+    </TabControl>
+  </StackPanel>
+</UserControl>

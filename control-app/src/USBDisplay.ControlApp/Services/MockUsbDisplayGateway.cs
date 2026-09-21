@@ -31,8 +31,8 @@ public sealed class MockUsbDisplayGateway : IUsbDisplayGateway, IDisposable
         Devices = new List<DeviceInfo> { new("DEMO123", AdbDeviceState.Device, "DemoTablet", "demo", "1") };
         Capabilities = new Dictionary<string, string>
         {
-            ["codecs"] = "h264,h265,av1",
-            ["transport"] = "adb-compat,native-usb-bulk,wifi-tls",
+            ["codecs"] = "h264,h265",
+            ["transport"] = "adb-compat,wifi-tls",
         };
         _tick = new System.Timers.Timer(500) { AutoReset = true };
         _tick.Elapsed += (_, _) => OnTick();

@@ -24,6 +24,31 @@ Windows Display Stack → IDD (USBDisplay monitor) → Capture (swap-chain readb
 
 ---
 
+## Get started
+
+**Just want to use it?** → **[QUICKSTART.md](QUICKSTART.md)** walks through the
+driver, the tablet app, and streaming in about ten minutes. Prebuilt,
+no-compile-needed artifacts are on the
+[Releases](https://github.com/priyanshuthakare/USBdisplay/releases) page.
+
+**Building from source?**
+
+```powershell
+git clone https://github.com/priyanshuthakare/USBdisplay
+cd USBdisplay
+.\scripts\setup.ps1 -Check   # report which toolchains are present
+.\scripts\setup.ps1          # build + test everything available
+```
+
+**Releasing?** Push a tag and CI builds and publishes everything:
+
+```powershell
+.\scripts\check-versions.ps1 -Strict   # confirm components match VERSION
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+---
+
 ## 1. Repository Map
 
 ```text
@@ -85,15 +110,24 @@ control-app/            Windows Control Center GUI (.NET 8 + WPF, C#)
                         ProcessManager, DiagnosticsService, LogService,
                         ConfigurationService, CaptureMonitor, HostIdentity,
                         QrCodeService, StreamTelemetryAccumulator
-    ViewModels/         MainViewModel + one per page (8 pages)
-    UI/                 MainWindow.xaml + 8 views + SignalMonitor + dark theme
+    ViewModels/         MainViewModel + Setup/Advanced containers + leaf VMs
+    UI/                 MainWindow.xaml + views + SignalMonitor + dark theme
   tests/                MSTest: parsers, state machine, backoff, config,
                         diagnostics, pairing QR, capture monitor
 
-common/                 Cross-component contracts pointer
 docs/                   architecture.md, protocol.md, idd-driver.md, encoder.md,
                         wifi.md, control-app.md, development-plan.md, testing.md
-tests/ benchmarks/ tools/ scripts/   System/integration tests, perf harnesses
+scripts/                setup.ps1 (prereq check + guided build), check-versions.ps1
+.github/workflows/      rust.yml, android.yml, dotnet.yml, release.yml (tagged releases)
+
+QUICKSTART.md           End-user install + streaming walkthrough
+CHANGELOG.md            Release history (Keep a Changelog)
+LICENSE-APACHE, LICENSE-MIT   Dual license (Apache-2.0 OR MIT)
+SECURITY.md             Security model + private vulnerability reporting
+CONTRIBUTING.md         Build/test per component, conventions, PR flow
+THIRD_PARTY_NOTICES.md  Bundled dependency licenses
+CODE_OF_CONDUCT.md      Contributor Covenant 2.1
+VERSION                 Single source of truth for the release version
 ```
 
 ---
@@ -173,9 +207,9 @@ Three slices are fully working, plus two transports and a GUI orchestration laye
 | 4 USB Transport | ADB bridge → native bulk, fragmentation/CRC/double-buffer/reconnect, USB2/3 adaptation | **Partial**: ADB bridge + fragmentation/CRC + live mode done. Native bulk endpoints, disk-free SHM handoff, reconnect SM, USB2/3 adaptation open. |
 | 5 Android Decode/Render | H.265 decode, SurfaceView pacing, adaptive buffering/backpressure, 60/120 fps validation | **Partial**: H.264/H.265 decode + pacing + backpressure done. Buffer tuning + on-device 60/120 fps latency validation need hardware. |
 | 6 Input | Touch→HID, stylus pressure/tilt/eraser/Ink, keyboard/IME, mouse abs/rel/scroll | **Partial**: touch + keyboard software slice done. Stylus/IME/relative/HID-device binding open. |
-| 7 Diagnostics/Packaging | Dashboard, installer + signing, latency/bandwidth graphs, CI | **Partial**: Control Center + `verify.ps1` + GitHub Actions (Rust ubuntu+windows, Android JDK17 APK artifact) done. Installer/signing flow + realtime graphs open. Lint (`fmt --check`, `clippy`) runs non-blocking — pre-existing debt, not a merge gate yet. |
+| 7 Diagnostics/Packaging | Dashboard, installer + signing, latency/bandwidth graphs, CI | **Partial**: Control Center (3-page shell: Home / Setup / Advanced) + `verify.ps1` + GitHub Actions (Rust ubuntu+windows, Android JDK17 test+APK, .NET test on windows-latest) done. Installer/signing flow + realtime graphs open. Lint (`fmt --check`, `clippy`) runs non-blocking — pre-existing debt, not a merge gate yet. |
 
-**Current branch:** `feature/input-return-and-ci` ahead of `origin/feature/input-return-and-ci` with uncommitted work: `AndroidManifest.xml` (CAMERA for scan-to-trust), `WifiListener.kt`, `WifiPairActivity.kt`, `activity_wifi_pair.xml`, new `PcPairPayload.kt` + `ScanPcActivity.kt` + `activity_scan_pc.xml` + test, `control-app` solution/csproj/XAML/VM/service changes (`CaptureMonitor`, `HostIdentity`, `QrCodeService` + tests), `docs/wifi.md`, `host/streamer` main/stream/wifi changes. Commit or stash before switching branches.
+**Release readiness:** the repository is prepared for an open-source release — dual `LICENSE-*`, `SECURITY.md`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md`, no committed IDE/build junk, honest `capabilities`, aligned driver version, and CI covering all three buildable components. Remaining gaps are tracked openly in [`docs/review-findings.md`](docs/review-findings.md) (mostly hardware- or certificate-dependent: signed driver, native USB bulk, vendor encoder backends, on-device latency validation).
 
 **Today you can:** build/test Rust protocol, run CLI probes, sign+install IDD and see virtual monitor, `encode-capture` BMPs to validated H.264, install Android shell and stream decoded frames over USB or WiFi, drive everything from Control Center GUI or CLI.
 
@@ -207,7 +241,7 @@ IDD virtual monitor
 | Capture dir | `%ProgramData%\USBDisplay\capture\capture_*.bmp` | 32-bpp top-down `BI_RGB`. Live mode deletes stale backlog. |
 | WiFi TOFU store | `%AppData%\USBDisplay\paired.json` → `{tablet_id, ip, cert_fingerprint, paired_at}` | Read-only in GUI; never edited by GUI. |
 | GUI settings | `%AppData%\USBDisplay\control-app-settings.json` | Plain JSON, schema-tolerant load (see 4.8). |
-| Driver PnP ID | `Root\USBDisplayIdd`, driver `0.2.0.0` | `install.ps1 / uninstall.ps1 / verify.ps1`, `pnputil`, SetupAPI. |
+| Driver PnP ID | `Root\USBDisplayIdd`, driver `0.2.0.1` | 4-part install version, independent of the product version in `VERSION` (PnP keys the store on it). `install.ps1 / uninstall.ps1 / verify.ps1`, `pnputil`, SetupAPI. |
 | Driver logs | ETW `USBDisplay.IddDriver`, `DriverFrameworks-UserMode/Operational`, `Kernel-PnP/Configuration`, `System` | Read via `wevtutil`/EventLog (read-only). |
 
 ### 4.2 Host CLI (`usbdisplay-streamer`)
@@ -230,7 +264,7 @@ cargo run -p usbdisplay-streamer -- stream-capture --transport wifi --device-ip 
 | Command | Lines |
 |---|---|
 | `devices` | `serial=… state=Device|Unauthorized|Offline|Other model=… product=… transport_id=…` per device, or `no_android_devices=true` |
-| `capabilities` | `codecs=h264,h265,av1`, `transport=adb-compat,native-usb-bulk,wifi-tls`, `capture=virtual-monitor-only`, `input=hid-touch,hid-pen,keyboard,mouse` |
+| `capabilities` | `codecs=h264,h265`, `transport=adb-compat,wifi-tls`, `capture=virtual-monitor-only`, `input=mouse,keyboard` |
 | `probe-frame` | `probe_frame_bytes=N`, `payload_crc32=0x…` |
 | `transport-probe` | `transport_packets=N`, `transport_bytes=N`, `max_packet_payload=N` |
 | `encode-capture` | `encoder_backend=MediaFoundation`, `encoded_units=N`, `nal_total=N sps=… pps=… vps=… idr=N non_idr=N`, `stream_playable=true`, `transport_packets=N`, `decoded_frames=N decoded_size=WxH`, `decode_roundtrip=PASS`, `OVERALL: PASS …` |
@@ -337,16 +371,12 @@ Reference bytes: pointer `Down/Left/id2 (40000,12345)` → `01 01 00 02 40 9C 39
 
 ### 4.9 Control Center GUI (`control-app/`)
 
-- Window: `MainWindow.xaml` 1080×720 (min 900×600), top bar (title, system badge, DEMO MODE flag, admin badge/detail, Refresh), left nav (Dashboard, Driver, Display, Device, Services, Logs, Diagnostics, Settings), page `ContentControl`, first-run overlay (3 steps + Open Diagnostics / Get Started).
-- Pages:
-  - **Dashboard**: giant status text, START/STOP/RESTART, transport combo (usb/wifi) + CONNECT USB / CONNECT WI-FI, WiFi IP/QR-JSON + PIN fields (visible only for wifi), connection note, SHOW PAIRING CODE (PC QR `{"v":1,"host_id":…}` via `QrCodeService` + caption), SIGNAL (`SignalMonitor` 110px pipeline strip), STREAM telemetry line (Consolas; `Latency: N/A (not measured)` is honest), RECENT ACTIVITY list.
-  - **Driver**: package/instance/problem-code status, Install/Uninstall/Restart/Enable-Disable (elevated, confirmed), `verify.ps1` output.
-  - **Display**: `DisplayInfo` list (USBDisplay highlighted), Open Display Settings / Extend (`DisplaySwitch.exe /extend`).
-  - **Device**: adb devices table (serial/state/model/product/transport_id), poll every 5 s, reconnect/restart-server maintenance, path configurable.
-  - **Services**: `ServiceEntry` list — Streamer process (RUNNING/STOPPED + exe/pid/uptime), WUDFRd reflector binding (BOUND/NOT BOUND), ADB server (AVAILABLE). Honest label: streamer/encoder are child **processes**, not Windows services.
-  - **Logs**: ring-buffered stdout/stderr + ETW/event-log excerpts, level filter, export.
-  - **Diagnostics**: one-click full run (`DiagnosticsService`), per-check Pass/Fail + remediation, `SYSTEM READY` vs `N check(s) failed`.
-  - **Settings → Advanced**: streamer/adb/driver-script paths, codec/bitrate/fps/GOP, USB port, transport/device-ip/PIN, capture purge toggles, log level, tray/startup, danger-zone driver management.
+- Window: `MainWindow.xaml` 1080×720 (min 900×600), top bar (title, system badge, DEMO MODE flag, admin badge/detail, Refresh), **three-item left nav (Home, Setup, Advanced)**, page `ContentControl`, first-run overlay (3 steps + Run Diagnostics / Get Started).
+- Pages (three-item shell; the leaf surfaces are unchanged, just grouped):
+  - **Home** = the Dashboard: giant status text, START/STOP/RESTART, transport combo (usb/wifi) + CONNECT USB / CONNECT WI-FI, WiFi IP/QR-JSON + PIN fields (visible only for wifi), connection note, SHOW PAIRING CODE (PC QR `{"v":1,"host_id":…}` via `QrCodeService` + caption), SIGNAL (`SignalMonitor` 110px pipeline strip), STREAM telemetry line (Consolas; `Latency: N/A (not measured)` is honest), RECENT ACTIVITY list.
+  - **Setup** = tabs: **Driver** (package/instance/problem-code status, Install/Uninstall/Restart/Enable-Disable, elevated + confirmed, `verify.ps1` output) and **Device** (adb devices table serial/state/model/product/transport_id, poll every 5 s, reconnect/restart-server maintenance, Wi-Fi trust/security panel). Wi-Fi pairing inputs live on Home only — not duplicated here.
+  - **Advanced** = tabs: **Display** (`DisplayInfo` list, Open Display Settings / Extend), **Services** (`ServiceEntry` list — streamer process, WUDFRd reflector binding, ADB server; honest: child **processes**, not Windows services), **Logs** (ring-buffered stdout/stderr + ETW/event-log excerpts, level filter, export), **Diagnostics** (one-click full run, per-check Pass/Fail + remediation, `SYSTEM READY` vs `N check(s) failed`), **Settings** (streamer/adb/driver-script paths, codec/bitrate/fps/GOP, USB port, transport/device-ip/PIN, capture purge toggles, log level, tray/startup, danger-zone driver management).
+  - `SetupViewModel` / `AdvancedViewModel` are thin containers that re-host the existing leaf view models as tabs; the tray "Diagnostics" action and first-run overlay jump straight to the Diagnostics tab via `AdvancedViewModel.SelectedIndex`.
 - Gateway contract: `IUsbDisplayGateway` (State, Health, StatusMessage, StartupSteps, Telemetry, Driver, Displays, Devices, Processes, ServiceEntries, LastDiagnostics, Capabilities, Settings; `Start/Stop/Restart/RestartComponent/RunDiagnostics/Driver* /OpenDisplaySettings/ExtendDisplays/RunAdbMaintenance/SaveSettings/RefreshAll`). `RealUsbDisplayGateway.StartAsync` gates: driver package → driver loaded → virtual monitor enumerated → streamer binary → device (USB) or device-ip (WiFi) → purge stale captures → `StartStream(live:true, loop:true, --stats-json)` → wait ≤45 s for `connected + streamed_frames increasing` → ACTIVE. `MockUsbDisplayGateway` powers `--demo`.
 - `AppSettings` JSON (`%AppData%\USBDisplay\control-app-settings.json`): `StreamerPath, AdbPath, DriverScriptsDir, Codec=h264, BitrateBps=20000000, Fps=60, Gop=60, UsbPort=27183, Transport=usb, DeviceIp=, Pin=, LaunchAtStartup, MinimizeToTray=true, ConfirmBeforeStop=true, ConfirmDestructive=true, LogLevel=Info, DemoMode, AutoPurgeCapture=true, CapturePurgeAgeSeconds=300, CaptureWarnMb=512, FirstRunDone, AutoStartStreaming, DevicePollSeconds=5`.
 - `StreamTelemetry` record: `StreamedFrames, StreamedPackets, WriteStallMsMax, InputEventsInjected, Fps, Codec, Resolution, EncoderBackend, BitrateBps, DroppedFrames, CrcFailures, Reconnects, UpdatedAt`. `StreamStartOptions(Transport, Codec, BitrateBps, Fps, Gop, UsbPort, Serial?, DeviceIp?, Pin?, Live, Loop)` → CLI args (no shell strings; `ProcessStartInfo` array).
@@ -495,9 +525,30 @@ Dashboard → START USB DISPLAY runs the same gated orchestration as the CLI pat
 
 ---
 
-## 8. Continuous Integration
+## 8. Continuous Integration & Releases
 
-GitHub Actions on every push/PR: Rust workspace build+test (Ubuntu + Windows) and Android unit tests + debug APK. Lint job is informational until formatting/clippy debt is cleared.
+**On every push/PR** (`.github/workflows/`): Rust workspace build+test on Ubuntu
++ Windows (`rust.yml`), Android `testDebugUnitTest` + `assembleDebug` (`android.yml`),
+and the Control Center MSTest suite on `windows-latest` (`dotnet.yml`). The Rust
+lint job is informational until formatting/clippy debt is cleared.
+
+**On a `v*` tag** (`release.yml`): builds and attaches these to a GitHub Release —
+
+| Asset | How it is produced | Runs with |
+|---|---|---|
+| `usbdisplay-control-center-<ver>-win-x64.zip` | `dotnet publish` self-contained, single-file, win-x64 | No .NET install needed |
+| `usbdisplay-streamer-<ver>-win-x64.zip` | `cargo build --release -p usbdisplay-streamer` | Standalone `.exe` |
+| `usbdisplay-android-<ver>.apk` | `gradlew assembleDebug` (debug-signed, directly installable) | Android 8.0+ |
+| `usbdisplay-driver-scripts.zip` | Sources + INF + `*.ps1` for the IDD | Needs WDK; test-signed locally |
+
+The IDD itself is **not** built in CI — it needs the Windows Driver Kit and, for
+anything beyond a test-signed machine, a real signing certificate. Releasing a
+WHQL-signed package is tracked in `docs/review-findings.md` (6.2). A Play-ready
+APK likewise needs a keystore supplied via release secrets; the shipped APK is
+debug-signed so it installs without ceremony.
+
+Version drift across Cargo/MSBuild/Gradle/INF is reported by
+`scripts/check-versions.ps1` against the root `VERSION` file.
 
 ## 9. Non-Goals
 
@@ -508,4 +559,8 @@ GitHub Actions on every push/PR: Rust workspace build+test (Ubuntu + Windows) an
 
 ## 10. License
 
-Licensed under `Apache-2.0 OR MIT` (see `Cargo.toml`). Driver/GUI subcomponents follow their own project files where noted.
+Dual-licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT)
+at your option. Bundled third-party components are summarized in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). See [`SECURITY.md`](SECURITY.md)
+for the security model and reporting, and [`CONTRIBUTING.md`](CONTRIBUTING.md) to
+get started. The IDD driver builds against the Microsoft WDK under its own terms.

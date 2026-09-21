@@ -1,0 +1,174 @@
+name: Release
+
+# Push a tag like v0.1.0 to build and publish a GitHub Release with
+# ready-to-use artifacts. No third-party release actions are used — the
+# preinstalled `gh` CLI creates the release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  control-center:
+    name: Control Center (win-x64, self-contained)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}" -replace '^v', ''
+          if (-not $v) { $v = "0.0.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      # Self-contained single-file publish: end users need NO .NET runtime
+      # installed. WPF requires the native libs to be extracted at run time.
+      - name: Publish
+        shell: pwsh
+        run: |
+          dotnet publish control-app/src/USBDisplay.ControlApp/USBDisplay.ControlApp.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:Version=${{ steps.ver.outputs.version }} `
+            -o publish/control-center
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item README.md, QUICKSTART.md, LICENSE-MIT, LICENSE-APACHE, THIRD_PARTY_NOTICES.md publish/control-center/
+          Compress-Archive -Path publish/control-center/* `
+            -DestinationPath "publish/usbdisplay-control-center-${{ steps.ver.outputs.version }}-win-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: control-center
+          path: publish/usbdisplay-control-center-*-win-x64.zip
+          if-no-files-found: error
+
+  streamer:
+    name: Streamer CLI (win-x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p usbdisplay-streamer --locked
+
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}" -replace '^v', ''
+          if (-not $v) { $v = "0.0.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path publish | Out-Null
+          Copy-Item target/release/usbdisplay-streamer.exe publish/
+          Copy-Item README.md, QUICKSTART.md, LICENSE-MIT, LICENSE-APACHE, THIRD_PARTY_NOTICES.md publish/
+          Compress-Archive -Path publish/* `
+            -DestinationPath "publish/usbdisplay-streamer-${{ steps.ver.outputs.version }}-win-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streamer
+          path: publish/usbdisplay-streamer-*-win-x64.zip
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # assembleDebug is signed with the standard Android debug key, so it is
+      # directly installable via `adb install` with no minification surprises.
+      # A Play-ready release build needs a keystore supplied via secrets.
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "dist/usbdisplay-android-${GITHUB_REF_NAME#v}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: android/dist/*.apk
+          if-no-files-found: error
+
+  driver-scripts:
+    name: Driver build/install scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The IDD itself needs the Windows Driver Kit and (for anything other than
+      # a test-signed local machine) a real signing certificate, so it is not
+      # built here. These are the scripts + INF + sources to build it locally.
+      - name: Package
+        run: |
+          cd driver/idd
+          zip -r "../../usbdisplay-driver-scripts.zip" . \
+            -x "package/*" -x "obj/*" -x "bin/*" -x "*.user"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver-scripts
+          path: usbdisplay-driver-scripts.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    # Only tag pushes publish a release; a manual dispatch just builds artifacts.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [control-center, streamer, android, driver-scripts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "USBDisplay ${{ github.ref_name }}" \
+            --generate-notes

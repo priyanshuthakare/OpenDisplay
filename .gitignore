@@ -11,6 +11,11 @@ local.properties
 # IDE
 .idea/
 .vscode/
+**/.vs/
+**/.suo
+**/*.user
+**/*.vsidx
+UpgradeLog*.htm
 
 # Windows driver build outputs
 driver/idd/.vs/
@@ -24,6 +29,11 @@ control-app/**/bin/
 control-app/**/obj/
 control-app/publish/
 control-app/TestResults/
+
+# Release packaging outputs
+publish/
+usbdisplay-*.zip
+android/dist/
 
 # OS
 Thumbs.db

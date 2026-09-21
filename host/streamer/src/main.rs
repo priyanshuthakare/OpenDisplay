@@ -143,10 +143,14 @@ fn main() -> Result<()> {
             }
         }
         Command::Capabilities => {
-            println!("codecs=h264,h265,av1");
-            println!("transport=adb-compat,native-usb-bulk,wifi-tls");
+            // Advertise only what the host actually implements today. The wire
+            // protocol reserves AV1 and the driver reserves native USB bulk /
+            // HID input as future work, but none are implemented, so they are
+            // deliberately not listed here (see docs/review-findings.md 7.2).
+            println!("codecs=h264,h265");
+            println!("transport=adb-compat,wifi-tls");
             println!("capture=virtual-monitor-only");
-            println!("input=hid-touch,hid-pen,keyboard,mouse");
+            println!("input=mouse,keyboard");
         }
         Command::ProbeFrame {
             width,

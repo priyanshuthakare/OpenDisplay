@@ -15,7 +15,7 @@ all USBDisplay knowledge lives behind service interfaces.
 
 | Component | Location | Interface the GUI uses |
 |---|---|---|
-| IDD driver 0.2.0.0 (`Root\USBDisplayIdd`) | `driver/idd/` | `install.ps1` / `uninstall.ps1` / `verify.ps1` (elevated); `pnputil`; SetupAPI PnP state |
+| IDD driver 0.2.0.1 (`Root\USBDisplayIdd`) | `driver/idd/` | `install.ps1` / `uninstall.ps1` / `verify.ps1` (elevated); `pnputil`; SetupAPI PnP state |
 | Streamer CLI (`usbdisplay-streamer`) | `host/streamer/` via `cargo build` | Subprocesses: `devices`, `capabilities`, `probe-frame`, `transport-probe`, `encode-capture`, `stream-capture`; stdout `key=value` lines |
 | Encoder (Media Foundation) | `host/encoder/` | Via streamer stdout (`stream_encoder_backend=`, `backend …: SELECTED`) |
 | Transport/protocol | `transport/`, `protocol/` | Via streamer stdout (`streamed_packets=`, `bitrate_step_*`); no direct calls |
