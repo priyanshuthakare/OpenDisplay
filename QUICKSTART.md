@@ -7,6 +7,29 @@ for architecture and protocol details see [`docs/`](docs/).
 
 ---
 
+> ## ⚠ Read this first — the screen is not live yet
+>
+> The pieces each work, but **they are not joined up end-to-end**. The driver
+> captures your virtual monitor into memory, and then nothing hands those frames
+> to the streaming host. That handoff is not implemented (tracked as FR-CAP-4 in
+> [`docs/PRD.md`](docs/PRD.md)), and on-disk capture was deliberately removed.
+>
+> **What this means in practice:** you can install the driver and get a real
+> second monitor in Windows Display Settings, install the tablet app, and pair
+> over Wi-Fi — but pressing START will not put your desktop on the tablet. The
+> host reports `no capture_*.bmp frames found` (or waits on
+> `waiting_for_capture_frames=true`), on both USB and Wi-Fi.
+>
+> **What you can still try today:** feed the host your own `.bmp` frames and the
+> whole encode → USB/Wi-Fi → Android decode path runs end-to-end (see
+> [Prefer the command line?](#prefer-the-command-line)). That exercises
+> everything except capture itself.
+>
+> Everything below is accurate about *how* each piece works. It is not a
+> statement that the full pipeline runs today.
+
+---
+
 ## What it does
 
 Windows gets a **real virtual monitor** (an Indirect Display Driver), captures
@@ -15,6 +38,8 @@ streams it to the tablet, which decodes it fullscreen. Touch and keyboard come
 back to Windows as real input.
 
 No cloud. No account. No telemetry.
+
+> The capture → handoff step is the part that is not finished; see the note above.
 
 ---
 
@@ -87,7 +112,12 @@ plug in the USB cable. Accept the "Allow USB debugging?" prompt.
 
 Open **USBDisplay Control Center** (the app from step 1) and press **START USB DISPLAY**.
 
-The Home page walks you through it:
+> **This will not show your desktop on the tablet yet.** The capture handoff is
+> unimplemented (see the note at the top), so the host finds no frames and the
+> run ends in an error like `No frames received within 45 s`. The driver and
+> virtual monitor setup below is still real and worth checking.
+
+The Home page looks like this:
 
 ```
 ┌──────────────────────────────────┐
@@ -102,10 +132,11 @@ The Home page walks you through it:
 ```
 
 If anything is red, open **Advanced → Diagnostics** and press **RUN FULL
-DIAGNOSTIC** — it reports exactly which step failed and how to fix it.
+DIAGNOSTIC** — it reports which step failed and how to fix it.
 
-Finally, in Windows **Display Settings**, set the new monitor to **Extend**.
-Your tablet is now a second screen.
+At this point Windows **Display Settings** should list the new monitor; set it to
+**Extend**. That part genuinely works. Getting pixels onto the tablet needs the
+missing handoff.
 
 ---
 
@@ -116,10 +147,15 @@ Your tablet is now a second screen.
 cargo run -p usbdisplay-streamer -- devices
 cargo run -p usbdisplay-streamer -- capabilities
 
-# Stream over USB
+# Stream your OWN frames (the virtual monitor produces none yet).
+# --input-dir must contain 32-bpp top-down BMPs.
 cargo run -p usbdisplay-streamer -- stream-capture `
-    --input-dir "$env:ProgramData\USBDisplay\capture" --loop
+    --input-dir "C:\path\to\your\bmp\frames" --loop
 ```
+
+The second command is the one that works today: with real BMPs in `--input-dir`,
+frames encode, travel over USB or Wi-Fi, and decode on the tablet. It is the
+capture step — not the transport — that is missing.
 
 ---
 
@@ -144,7 +180,7 @@ device-to-PC connections; use a normal home network, a hotspot, or USB.
 | Driver won't load / yellow bang in Device Manager | Test signing not on — `bcdedit /set testsigning on`, reboot. |
 | `pnputil` says "up to date" but nothing changed | Bump `DriverVer` in `driver/idd/Driver.inf` or run `uninstall.ps1` first. |
 | Tablet shows `unauthorized` in `adb devices` | Unlock the tablet and accept the USB debugging prompt. |
-| "No frames received within 45 s" | Check Advanced → Logs for `stream_encoder_backend=`, and that the tablet app is open. |
+| "No frames received within 45 s" | Expected today — the capture handoff is unimplemented, so the host never gets frames (see the note at the top). Otherwise check Advanced → Logs for `stream_encoder_backend=`, and that the tablet app is open. |
 | Changed resolution briefly froze the tablet | Expected — the host rebuilds the encoder at the new size (`stream_resolution_change`). If it stays black, press **RESTART**. |
 | Wi-Fi says "host unreachable … use USB" | AP-isolated/guest network. Use a normal SSID, hotspot, or USB. |
 
@@ -154,7 +190,7 @@ device-to-PC connections; use a normal home network, a hotspot, or USB.
 
 ```powershell
 git clone https://github.com/priyanshuthakare/OpenDisplay
-cd USBdisplay
+cd OpenDisplay
 .\scripts\setup.ps1          # checks prerequisites, then builds what it can
 ```
 
@@ -167,9 +203,13 @@ cd USBdisplay
 Be aware of these before you file an issue — they are known and tracked in
 [`docs/review-findings.md`](docs/review-findings.md):
 
+- **Streaming does not work end-to-end.** The driver→host capture handoff is
+  unimplemented, so no frames reach the streamer. This is the blocking gap.
+- **Disk frame capture is intentionally disabled.** Frames are meant to move
+  through memory, and that in-memory path is the one still to be built — please
+  do not re-enable BMP capture as a workaround.
 - The driver is **test-signed**, not WHQL-signed.
 - **USB goes through ADB**; native USB bulk transfer is not implemented.
 - **Wi-Fi** is for trusted home/lab networks, not hostile ones.
 - Encoders: **Media Foundation H.264/H.265** only (NVENC/QSV/AMF are stubs).
 - Input is **mouse + keyboard** (no stylus pressure/tilt).
-- Resolution changes restart the stream.

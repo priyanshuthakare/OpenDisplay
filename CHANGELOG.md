@@ -80,9 +80,17 @@ or security-behavior changes.
 
 ### Known limitations
 
-Unchanged in this release and tracked in [`docs/review-findings.md`](docs/review-findings.md):
-test-signed driver (no WHQL), ADB-based USB transport (no native bulk), Wi-Fi
-hardening items (PIN pairing window, per-host input consent, key/PIN storage),
-vendor encoder backends as stubs, and no stylus/pen input.
+**Blocking: streaming does not work end-to-end.** The driver captures the
+virtual monitor into memory, but the driver→host handoff is unimplemented
+(`docs/PRD.md` FR-CAP-4, "disk-free shared-memory handoff") and on-disk frame
+capture is deliberately disabled, so no frames reach the streamer on either
+transport. Everything downstream of capture works and can be exercised by
+pointing `--input-dir` at your own BMPs.
+
+Also unchanged in this release and tracked in
+[`docs/review-findings.md`](docs/review-findings.md): test-signed driver (no
+WHQL), ADB-based USB transport (no native bulk), Wi-Fi hardening items (PIN
+pairing window, per-host input consent, key/PIN storage), vendor encoder
+backends as stubs, and no stylus/pen input.
 
 [Unreleased]: https://github.com/priyanshuthakare/OpenDisplay/commits/master

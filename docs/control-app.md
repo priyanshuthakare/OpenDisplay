@@ -21,7 +21,7 @@ all USBDisplay knowledge lives behind service interfaces.
 | Transport/protocol | `transport/`, `protocol/` | Via streamer stdout (`streamed_packets=`, `bitrate_step_*`); no direct calls |
 | Android client | `android/` | Installed APK; observed via `adb` + streamer output |
 | ADB | external (`adb` on PATH or `C:\platform-tools`) | `adb devices -l`, `adb install -r`, `adb shell monkey` |
-| Capture frames | `%ProgramData%\USBDisplay\capture\capture_*.bmp` | Directory watch (file count / newest timestamp) |
+| Capture frames | `%ProgramData%\USBDisplay\capture\capture_*.bmp` | Directory watch (file count / newest timestamp). **Nothing writes these today** — the driver's disk capture was removed and the in-memory handoff is unimplemented, so the Control Center's "no frames" gate is expected to fail until capture is wired up. |
 | WiFi pairing store | `%AppData%\USBDisplay\paired.json` | Read-only display; never edited by the GUI |
 | Driver logs | ETW `USBDisplay.IddDriver`, event logs `DriverFrameworks-UserMode/Operational`, `Kernel-PnP/Configuration`, `System` | `Get-WinEvent` via `wevtutil` / EventLog API (read-only) |
 
